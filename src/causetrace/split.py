@@ -37,3 +37,12 @@ def load_split(conn: Connection | None = None) -> Split:
             return load_split(own)
     rows = conn.execute("SELECT ev_id, ev_date FROM events").fetchall()
     return split_events((r[0], r[1]) for r in rows)
+
+
+def corpus_cutoff(event_date: date) -> date:
+    """``before_date`` for retrieval about an event: the earlier of its date and HELD_OUT_FROM.
+
+    The single helper for every evaluation and the agent, so the retrieval corpus is always
+    history only and never contains the event's own date or later (docs/EVAL_PROTOCOL.md).
+    """
+    return min(event_date, HELD_OUT_FROM)

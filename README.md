@@ -23,3 +23,11 @@ make check                       # ruff, mypy, pytest
 
 For the full dataset, export the `events`, `aircraft`, `narratives` and `Findings` tables of
 `avall.mdb` with `mdb-export` into `data/raw/` and run `make ingest`.
+
+## Retrieval evaluation
+
+```sh
+uv run python scripts/draft_questions.py    # paid: needs ANTHROPIC_API_KEY in .env; capped by MAX_USD
+uv run python scripts/review_questions.py   # keep / edit / drop each draft (resumable)
+make eval-retrieval                         # writes artifacts/retrieval_results.{json,md}
+```

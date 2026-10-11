@@ -3,7 +3,7 @@ DATA ?= data/raw
 -include .env
 export
 
-.PHONY: up down migrate ingest index models check
+.PHONY: up down migrate ingest index models eval-retrieval retrieval-gate update-baseline check
 
 up:
 	docker compose up -d --wait
@@ -22,6 +22,17 @@ index: migrate
 
 models:
 	uv run --group ml python scripts/download_models.py
+
+eval-retrieval:
+	uv run --group ml python scripts/eval_retrieval.py
+
+# CI regression gate: rrf_rerank on the held-out events of the database (CI: the fixture).
+retrieval-gate:
+	uv run --group ml python scripts/eval_retrieval.py --gate artifacts/ci_baseline.json
+
+# Deliberate baseline change: run on the fixture (make ingest DATA=data/fixtures && make index).
+update-baseline:
+	uv run --group ml python scripts/eval_retrieval.py --write-baseline artifacts/ci_baseline.json
 
 check:
 	uv run ruff check .

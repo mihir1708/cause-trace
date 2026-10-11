@@ -5,6 +5,7 @@ description = "Predict NTSB causal findings for an aviation incident from its fa
 readme = "README.md"
 requires-python = ">=3.12,<3.13"
 dependencies = [
+    "anthropic>=0.70",
     "psycopg[binary]>=3.2",
     "pydantic>=2.7",
 ]

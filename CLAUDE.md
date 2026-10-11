@@ -43,14 +43,17 @@ retrieval over earlier investigations. Leakage control is the core requirement. 
 
 - `src/causetrace/` — package (`config`, `db`, `migrate`, `ingest`, `models`, `leakage`,
   `packets`, `gold`, `split`, `passages`, `embeddings`, `rerank`, `retrieval`, `index`;
-  SQL in `migrations/`).
+  `llm/` provider interface; `evaluation/` metrics and runners; SQL in `migrations/`).
 - Retrieval models (sentence-transformers, torch) are in the optional `ml` dependency
   group: `uv sync --group ml`. Tests use fakes (`tests/fakes.py`); the one `slow` test
   loads real models from the local Hugging Face cache only and skips when absent.
 - `tests/` — pytest; needs PostgreSQL at `TEST_DATABASE_URL`
   (default `postgresql://causetrace:causetrace@localhost:5432/causetrace_test`).
 - `scripts/` — `make_fixture.py`, `session_start.sh` (cloud SessionStart hook),
-  `download_models.py`.
+  `download_models.py`, `draft_questions.py` (paid LLM calls), `review_questions.py`,
+  `eval_retrieval.py`.
+- `evals/` — drafted and reviewed known-item questions; `artifacts/` — generated results
+  and `ci_baseline.json` (the CI retrieval gate; change it only with `make update-baseline`).
 - `docs/`, `data/fixtures/`, `data/raw/` (gitignored), `artifacts/`, `evals/`, `loadtests/`.
 
 ## Commands
@@ -61,6 +64,9 @@ make migrate                  # apply SQL migrations to DATABASE_URL
 make ingest DATA=data/fixtures  # load mdb-export CSVs, write artifacts/ingest_report.json
 make models                   # download retrieval models into the HF cache (network)
 make index                    # passages, lexical stats, embeddings (resumable)
+make eval-retrieval           # artifacts/retrieval_results.{json,md}
+make retrieval-gate           # CI gate: rrf_rerank vs artifacts/ci_baseline.json
+make update-baseline          # deliberate baseline change (run on the fixture)
 make check                    # ruff, mypy, pytest
 make down
 ```
