@@ -19,6 +19,7 @@ from causetrace.retrieval import (
     Mode,
     Retriever,
     build_or_tsquery,
+    effective_before_date,
     rrf_fuse,
     salient_terms,
     search,
@@ -241,3 +242,46 @@ def test_embedding_resumes_and_uses_cache(db: Connection) -> None:
     other.revision = "v2"
     stats = embed_passages(db, other, batch_size=500, max_batches=1)
     assert other.texts_embedded == min(500, total[0])
+
+
+def test_effective_before_date() -> None:
+    assert effective_before_date(date(2025, 6, 1), True) == HELD_OUT_FROM
+    assert effective_before_date(date(2015, 6, 1), True) == date(2015, 6, 1)
+    assert effective_before_date(None, True) == HELD_OUT_FROM
+    assert effective_before_date(date(2025, 6, 1), False) == date(2025, 6, 1)
+    assert effective_before_date(None, False) is None
+
+
+@pytest.mark.parametrize("mode", MODES)
+def test_history_only_caps_a_held_out_before_date(
+    indexed: tuple[Connection, FakeEmbedder], mode: Mode
+) -> None:
+    """A held-out query whose before_date is its own date still sees history only."""
+    conn, embedder = indexed
+    row = conn.execute(
+        "SELECT ev_id, ev_date FROM events WHERE ev_date >= %s"
+        " ORDER BY ev_date DESC, ev_id LIMIT 1",
+        (HELD_OUT_FROM,),
+    ).fetchone()
+    assert row is not None
+    ev_id, ev_date = row
+    assert ev_date > HELD_OUT_FROM
+    packet = get_incident_packet(ev_id, conn)
+    query = "\n".join(a.narr_accp for a in packet.aircraft if a.narr_accp)
+    retriever = Retriever(conn, embedder, FakeReranker())
+
+    capped = retriever.search(query, 50, before_date=ev_date, exclude_event_id=ev_id, mode=mode)
+    assert capped.hits
+    assert all(h.metadata["event_date"] < HELD_OUT_FROM for h in capped.hits)
+    events = retriever.search_events(
+        query, 50, before_date=ev_date, exclude_event_id=ev_id, mode=mode
+    )
+    dates: dict[str, date] = dict(conn.execute("SELECT ev_id, ev_date FROM events").fetchall())
+    assert events.events and all(dates[e.event_id] < HELD_OUT_FROM for e in events.events)
+
+    # Only an explicit history_only=False lifts the cap (held-out passages then appear).
+    lifted = retriever.search(
+        query, 50, before_date=ev_date, exclude_event_id=ev_id, mode=mode, history_only=False
+    )
+    assert any(h.metadata["event_date"] >= HELD_OUT_FROM for h in lifted.hits)
+    assert all(h.metadata["event_date"] < ev_date for h in lifted.hits)

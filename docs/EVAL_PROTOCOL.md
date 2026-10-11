@@ -54,7 +54,8 @@ How the held-out retrieval evaluation runs (`scripts/eval_retrieval.py`):
   the query.
 - **Corpus:** every search uses `before_date = min(ev_date, 2024-01-01)`
   (`causetrace.split.corpus_cutoff`, the one helper for every evaluation and the agent) and
-  excludes the event itself, so only history events can be returned.
+  excludes the event itself, so only history events can be returned. Search also enforces
+  this itself: `history_only=True` (the default) caps any `before_date` at 2024-01-01.
 - **Ranked list:** the top 10 *distinct* events (`search_events`); an event that appears
   more than once counts once, at its first position. The IDCG pool is every history event
   before `before_date`, label sets counted with multiplicity.

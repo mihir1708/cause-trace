@@ -7,7 +7,7 @@ import pytest
 from conftest import FixtureData
 
 from causetrace.db import Connection
-from causetrace.passages import build_passages, chunk_words
+from causetrace.passages import NTSB_HEADINGS, build_passages, chunk_words, split_glued_headings
 
 
 def _text(n: int) -> str:
@@ -38,7 +38,8 @@ def test_build_passages_on_fixture(
 ) -> None:
     conn, _ = loaded
     counts = build_passages(conn)
-    assert counts["analysis"] == counts["probable_cause"] == 300
+    assert counts["probable_cause"] == 300
+    assert counts["analysis"] > 300  # long analyses are chunked like factual narratives
     assert counts["factual"] >= 300
     rows = conn.execute(
         "SELECT event_id, section_type, count(*), max(chunk_index) FROM passages GROUP BY 1, 2"
@@ -46,8 +47,23 @@ def test_build_passages_on_fixture(
     assert len({r[0] for r in rows}) == 300
     for _, section, n, max_chunk in rows:
         assert max_chunk == n - 1
-        if section != "factual":
+        if section == "probable_cause":
             assert n == 1
+    # Chunked sections never exceed the single-chunk threshold.
+    longest = conn.execute(
+        "SELECT section_type, max(array_length(regexp_split_to_array(btrim(content), '\\s+'), 1))"
+        " FROM passages WHERE section_type IN ('factual', 'analysis') GROUP BY 1"
+    ).fetchall()
+    assert len(longest) == 2 and all(n <= 400 for _, n in longest)
+    multi = conn.execute(
+        "SELECT count(*) FROM passages WHERE section_type = 'analysis' AND chunk_index > 0"
+    ).fetchone()
+    assert multi is not None and multi[0] > 0
+    # No heading stays glued to the next word.
+    glued = conn.execute(
+        "SELECT count(*) FROM passages WHERE content ~ '(HISTORY OF FLIGHT|INFORMATION)[A-Za-z0-9]'"
+    ).fetchone()
+    assert glued == (0,)
     # Metadata comes from the event and its first aircraft.
     row = conn.execute(
         "SELECT event_date, aircraft_category FROM passages"
@@ -58,3 +74,42 @@ def test_build_passages_on_fixture(
     before = conn.execute("SELECT count(*) FROM passages").fetchone()
     assert build_passages(conn) == counts
     assert conn.execute("SELECT count(*) FROM passages").fetchone() == before
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        ("HISTORY OF FLIGHTOn May 1, the pilot", "HISTORY OF FLIGHT On May 1, the pilot"),
+        (
+            "WRECKAGE AND IMPACT INFORMATIONThe wreckage",
+            "WRECKAGE AND IMPACT INFORMATION The wreckage",
+        ),
+        ("AIRPORT INFORMATIONhe airport", "AIRPORT INFORMATION he airport"),
+        ("TESTS AND RESEARCHGlassy residue", "TESTS AND RESEARCH Glassy residue"),
+        (
+            "at 1200 AKDT WRECKAGE AND IMPACT INFORMATIONOn",
+            "at 1200 AKDT WRECKAGE AND IMPACT INFORMATION On",
+        ),
+        ("COMMUNICATIONSAccording to ATC", "COMMUNICATIONS According to ATC"),
+        ("PERSONNEL INFORMATIONA review of", "PERSONNEL INFORMATION A review of"),
+        ("AIRPORT INFORMATIONN93AA, serial", "AIRPORT INFORMATION N93AA, serial"),
+        (
+            "ORGANIZATIONAL AND MANAGEMENT INFORMATIONMIE",
+            "ORGANIZATIONAL AND MANAGEMENT INFORMATION MIE",
+        ),
+        ("FIREThe fire", "FIRE The fire"),
+        # Already separated, longer uppercase words, acronyms and mid-word matches stay.
+        ("HISTORY OF FLIGHT\nOn May 1", "HISTORY OF FLIGHT\nOn May 1"),
+        ("FIREFIGHTING crews responded", "FIREFIGHTING crews responded"),
+        ("PIREPs, NOTAMs and AIRMETs", "PIREPs, NOTAMs and AIRMETs"),
+        ("SPITFIREThe", "SPITFIREThe"),
+        ("the fire started", "the fire started"),
+    ],
+)
+def test_split_glued_headings(raw: str, expected: str) -> None:
+    assert split_glued_headings(raw) == expected
+
+
+def test_every_heading_is_split() -> None:
+    for heading in NTSB_HEADINGS:
+        assert split_glued_headings(f"{heading}The text") == f"{heading} The text"

@@ -3,6 +3,8 @@
 One entry point, ``search``; ``search_events`` collapses passage hits to events.
 ``before_date`` and ``exclude_event_id`` are applied in the SQL of every candidate query,
 so no mode can return a passage from the target event or from on/after ``before_date``.
+By default (``history_only=True``) ``before_date`` is also capped at HELD_OUT_FROM, so only
+history passages can be returned; only an explicit ``history_only=False`` lifts the cap.
 Passages contain GOLD_ONLY text of their own events (docs/DATA_LEAKAGE.md).
 """
 
@@ -18,7 +20,7 @@ from psycopg import sql
 from causetrace.db import Connection, connect
 from causetrace.embeddings import Embedder, default_embedder, to_pgvector
 from causetrace.rerank import Reranker, default_reranker
-from causetrace.split import HELD_OUT_FROM
+from causetrace.split import HELD_OUT_FROM, corpus_cutoff
 
 Mode = Literal["dense", "lexical", "rrf", "rrf_rerank"]
 MODES: tuple[Mode, ...] = ("dense", "lexical", "rrf", "rrf_rerank")
@@ -296,17 +298,19 @@ class Retriever:
         before_date: date | None,
         exclude_event_id: str | None = None,
         mode: Mode = "rrf_rerank",
+        history_only: bool = True,
     ) -> SearchResult:
         """Top ``top_k`` passages for ``query`` from events strictly before ``before_date``.
 
-        ``before_date`` is required on purpose: pass ``None`` only outside evaluation.
+        ``before_date`` is required on purpose. With ``history_only`` (the default) it is
+        capped at HELD_OUT_FROM; evaluations and the agent never pass ``history_only=False``.
         """
         _check_top_k(top_k)
         timings: dict[str, float] = {}
         start = time.perf_counter()
         hits = self.ranked(
             query,
-            before_date=before_date,
+            before_date=effective_before_date(before_date, history_only),
             exclude_event_id=exclude_event_id,
             mode=mode,
             timings=timings,
@@ -322,14 +326,18 @@ class Retriever:
         before_date: date | None,
         exclude_event_id: str | None = None,
         mode: Mode = "rrf_rerank",
+        history_only: bool = True,
     ) -> EventSearchResult:
-        """Top ``top_k`` distinct events, ranked by their best passage in the full list."""
+        """Top ``top_k`` distinct events, ranked by their best passage in the full list.
+
+        ``before_date`` is capped at HELD_OUT_FROM unless ``history_only=False``.
+        """
         _check_top_k(top_k)
         timings: dict[str, float] = {}
         start = time.perf_counter()
         hits = self.ranked(
             query,
-            before_date=before_date,
+            before_date=effective_before_date(before_date, history_only),
             exclude_event_id=exclude_event_id,
             mode=mode,
             timings=timings,
@@ -343,6 +351,13 @@ class Retriever:
         ]
         timings["total_ms"] = _ms(start)
         return EventSearchResult(events=events[:top_k], timings_ms=timings)
+
+
+def effective_before_date(before_date: date | None, history_only: bool) -> date | None:
+    """The cutoff a search applies: capped at HELD_OUT_FROM (via corpus_cutoff) by default."""
+    if not history_only:
+        return before_date
+    return HELD_OUT_FROM if before_date is None else corpus_cutoff(before_date)
 
 
 def _replace(hit: SearchHit, *, score: float, rank: int) -> SearchHit:
@@ -361,6 +376,7 @@ def search(
     before_date: date | None,
     exclude_event_id: str | None = None,
     mode: Mode = "rrf_rerank",
+    history_only: bool = True,
     conn: Connection | None = None,
     embedder: Embedder | None = None,
     reranker: Reranker | None = None,
@@ -374,12 +390,18 @@ def search(
                 before_date=before_date,
                 exclude_event_id=exclude_event_id,
                 mode=mode,
+                history_only=history_only,
                 conn=own,
                 embedder=embedder,
                 reranker=reranker,
             )
     return Retriever(conn, embedder, reranker).search(
-        query, top_k, before_date=before_date, exclude_event_id=exclude_event_id, mode=mode
+        query,
+        top_k,
+        before_date=before_date,
+        exclude_event_id=exclude_event_id,
+        mode=mode,
+        history_only=history_only,
     )
 
 
@@ -390,6 +412,7 @@ def search_events(
     before_date: date | None,
     exclude_event_id: str | None = None,
     mode: Mode = "rrf_rerank",
+    history_only: bool = True,
     conn: Connection | None = None,
     embedder: Embedder | None = None,
     reranker: Reranker | None = None,
@@ -403,10 +426,16 @@ def search_events(
                 before_date=before_date,
                 exclude_event_id=exclude_event_id,
                 mode=mode,
+                history_only=history_only,
                 conn=own,
                 embedder=embedder,
                 reranker=reranker,
             )
     return Retriever(conn, embedder, reranker).search_events(
-        query, top_k, before_date=before_date, exclude_event_id=exclude_event_id, mode=mode
+        query,
+        top_k,
+        before_date=before_date,
+        exclude_event_id=exclude_event_id,
+        mode=mode,
+        history_only=history_only,
     )
