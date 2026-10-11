@@ -86,6 +86,8 @@ def test_check_gate() -> None:
     assert ok
     ok, msg = ev.check_gate({**base, "query_set_sha256": "y"}, base)
     assert not ok and "update-baseline" in msg
+    ok, msg = ev.check_gate(base, {**base, "mode": "rrf_rerank"})
+    assert not ok and "update-baseline" in msg
 
 
 def test_main_writes_results_and_gate(indexed: Connection, db_url: str, tmp_path: Path) -> None:
@@ -138,7 +140,7 @@ def test_main_writes_results_and_gate(indexed: Connection, db_url: str, tmp_path
     assert ev.main([*common, "--write-baseline", str(baseline)], retriever_factory=_retriever) == 0
     assert ev.main([*common, "--gate", str(baseline)], retriever_factory=_retriever) == 0
     data = json.loads(baseline.read_text())
-    assert data["mode"] == "rrf_rerank" and data["n_queries"] == 8
+    assert data["mode"] == "rrf" and data["n_queries"] == 8
     data["label_recall_at_10"] += 0.05
     baseline.write_text(json.dumps(data))
     assert ev.main([*common, "--gate", str(baseline)], retriever_factory=_retriever) == 1

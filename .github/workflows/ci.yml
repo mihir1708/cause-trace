@@ -51,7 +51,7 @@ jobs:
         run: make ingest DATA=data/fixtures
       - name: index fixtures
         run: make index
-      # Fails if rrf_rerank Label Recall@10 on the fixture's held-out events drops by more
+      # Fails if rrf Label Recall@10 on the fixture's held-out events drops by more
       # than 0.02 against artifacts/ci_baseline.json. The run's own numbers are uploaded as a
       # candidate baseline; change the baseline deliberately with `make update-baseline`.
       - name: retrieval regression gate
