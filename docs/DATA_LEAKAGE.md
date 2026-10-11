@@ -113,6 +113,15 @@ covers. Rules:
   incident and the cutoff) before any LLM support check; only findings with at least one
   citation judged SUPPORTED are answered.
 
+## Causal evaluation (`causetrace.evaluation.causal_*`)
+
+- Every system gets the target's packet only. The frequency prior and the kNN vote read
+  gold labels of history events (counts, neighbour votes, tuning on 2023 events); the
+  random-context draw and all retrieval are limited to passages before the case's cutoff
+  and exclude the target.
+- The target's gold labels are read through `causetrace.gold` for scoring only, as are the
+  gold labels of cited history events for citation support.
+
 ## Known limitations
 
 - **Report publication dates.** The exported tables have no final-report date, so a
@@ -132,3 +141,4 @@ covers. Rules:
   analysis passages are chunked like factual ones. No class changed.
 - 2026-10-11 — Added the agent section; packet narratives get the same heading split as
   passages (whitespace only, after the leakage gate). No class changed.
+- 2026-10-11 — Added the causal evaluation section. No class changed.

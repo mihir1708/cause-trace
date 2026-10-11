@@ -171,8 +171,11 @@ class Agent:
         provider: Provider,
         *,
         limits: AgentLimits = AGENT_LIMITS,
+        verify: bool = True,
     ) -> None:
+        """``verify=False`` skips the verify node: analyze's predictions are the answer."""
         self.conn = conn
+        self.verify_enabled = verify
         self.retriever = retriever
         self.provider = provider
         self.limits = limits
@@ -447,6 +450,22 @@ class Agent:
         }
 
     def finalize(self, state: AgentState) -> dict[str, Any]:
+        if not self.verify_enabled:
+            answer = [
+                {
+                    "label": str(f.get("label", "")).strip(),
+                    "short_name": self.taxonomy.get(str(f.get("label", "")).strip()),
+                    "confidence": f.get("confidence"),
+                    "citations": [c for c in f.get("citations", []) if isinstance(c, str)],
+                    "rationale": f.get("rationale"),
+                }
+                for f in state.get("predictions", [])
+            ][: self.limits.max_findings]
+            return {
+                "answer": answer,
+                "abstained": not answer,
+                "trace": [{"node": "answer" if answer else "abstain", "verify": False}],
+            }
         findings = (state.get("verification") or {}).get("findings", [])
         answer = [
             {
@@ -501,7 +520,8 @@ class Agent:
         g.add_node("retrieve", self.retrieve)
         g.add_node("check_evidence", self.check_evidence)
         g.add_node("analyze", self.analyze)
-        g.add_node("verify", self.verify)
+        if self.verify_enabled:
+            g.add_node("verify", self.verify)
         g.add_node("finalize", self.finalize)
         g.add_edge(START, "plan")
         g.add_edge("plan", "retrieve")
@@ -509,8 +529,11 @@ class Agent:
             "retrieve", self.after_retrieve, ["check_evidence", "analyze", "finalize"]
         )
         g.add_conditional_edges("check_evidence", self.after_check, ["retrieve", "analyze"])
-        g.add_edge("analyze", "verify")
-        g.add_conditional_edges("verify", self.after_verify, ["analyze", "finalize"])
+        if self.verify_enabled:
+            g.add_edge("analyze", "verify")
+            g.add_conditional_edges("verify", self.after_verify, ["analyze", "finalize"])
+        else:
+            g.add_edge("analyze", "finalize")
         g.add_edge("finalize", END)
         return g.compile()
 
