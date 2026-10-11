@@ -12,6 +12,8 @@ from conftest import FIXTURES, reset
 
 from causetrace.db import Connection
 from causetrace.evaluation.questions import (
+    BOILERPLATE,
+    MIN_WORDS,
     draft_all,
     kept_questions,
     read_jsonl,
@@ -60,6 +62,25 @@ def test_sample_is_stratified_deterministic_and_history_only(passages_db: Connec
     got = Counter(p.year for p in sample if p.section_type == "analysis")
     for year, n in rows:
         assert abs(got[year] - 73 * n / total) < 1
+
+
+def test_sample_skips_passages_that_cannot_identify_one_event(passages_db: Connection) -> None:
+    rows = passages_db.execute(
+        "SELECT passage_id, event_id, content FROM passages WHERE event_date < %s",
+        (HELD_OUT_FROM,),
+    ).fetchall()
+    events_by_text: dict[str, set[str]] = {}
+    for _, ev, content in rows:
+        events_by_text.setdefault(" ".join(content.lower().split()), set()).add(ev)
+    short = {pid for pid, _, content in rows if len(content.split()) < MIN_WORDS}
+    assert short  # the fixture has short probable-cause passages, so the filter is exercised
+
+    sample = sample_passages(passages_db, 220, seed=42)
+    for p in sample:
+        assert len(p.content.split()) >= MIN_WORDS
+        assert events_by_text[" ".join(p.content.lower().split())] == {p.event_id}
+        assert not any(marker in p.content.lower() for marker in BOILERPLATE)
+    assert not short & {p.passage_id for p in sample}
 
 
 def _responder(system: str, prompt: str, schema: dict[str, Any]) -> dict[str, Any]:

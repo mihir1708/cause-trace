@@ -19,6 +19,33 @@ DEFAULT_N = 220
 DEFAULT_SEED = 42
 SECTIONS = ("factual", "analysis", "probable_cause")
 
+# Passages that cannot identify a single event are never sampled: very short ones
+# ("None.", markup), and NTSB form text shared by many records (foreign investigations,
+# FBI-led events, pointers to separate reports).
+MIN_WORDS = 20
+BOILERPLATE = (
+    "for information purposes only",
+    "did not determine the probable cause",
+    "full report is available at",
+)
+_ELIGIBLE_SQL = f"""
+WITH history AS (
+    SELECT passage_id, event_id, section_type, event_date, content,
+           lower(regexp_replace(btrim(content), '\\s+', ' ', 'g')) AS norm
+    FROM passages
+    WHERE event_date < %(cutoff)s
+),
+shared AS (
+    SELECT norm FROM history GROUP BY norm HAVING count(DISTINCT event_id) > 1
+)
+SELECT passage_id, event_id, section_type, extract(year FROM event_date)::int, content
+FROM history
+WHERE array_length(regexp_split_to_array(btrim(content), '\\s+'), 1) >= %(min_words)s
+  AND norm NOT IN (SELECT norm FROM shared)
+  AND {" AND ".join(f"content NOT ILIKE '%%{marker}%%'" for marker in BOILERPLATE)}
+ORDER BY passage_id
+"""
+
 
 @dataclass(frozen=True)
 class SampledPassage:
@@ -47,17 +74,16 @@ def _largest_remainder(sizes: dict[int, int], n: int) -> dict[int, int]:
 def sample_passages(
     conn: Connection, n: int = DEFAULT_N, seed: int = DEFAULT_SEED
 ) -> list[SampledPassage]:
-    """``n`` passages from events before HELD_OUT_FROM, stratified by section and year.
+    """``n`` eligible passages from events before HELD_OUT_FROM, stratified by section and year.
+
+    Eligible: at least MIN_WORDS words, text not shared with any other event (whitespace and
+    case ignored) and no BOILERPLATE marker, so each question has exactly one right event.
 
     The n is split evenly across section types (remainder to the earlier ones in
     SECTIONS); within a section it is split across event years proportionally to the
     passage count (largest remainder), then sampled with ``random.Random(seed)``.
     """
-    rows = conn.execute(
-        "SELECT passage_id, event_id, section_type, extract(year FROM event_date)::int, content"
-        " FROM passages WHERE event_date < %s ORDER BY passage_id",
-        (HELD_OUT_FROM,),
-    ).fetchall()
+    rows = conn.execute(_ELIGIBLE_SQL, {"cutoff": HELD_OUT_FROM, "min_words": MIN_WORDS}).fetchall()
     cells: dict[str, dict[int, list[SampledPassage]]] = defaultdict(lambda: defaultdict(list))
     for pid, ev, section, year, content in rows:
         cells[section][year].append(SampledPassage(pid, ev, section, year, content))
