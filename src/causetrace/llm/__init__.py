@@ -6,9 +6,13 @@ Every call goes through a ``Provider``, which records tokens, USD cost and laten
 
 from causetrace.llm.provider import (
     BudgetExceededError,
+    Effort,
+    FallbackProvider,
     LLMResponseError,
     Provider,
+    ProviderUnavailableError,
     SpendTracker,
+    SystemPrompt,
     Usage,
     cost_usd,
     shared_tracker,
@@ -16,9 +20,13 @@ from causetrace.llm.provider import (
 
 __all__ = [
     "BudgetExceededError",
+    "Effort",
+    "FallbackProvider",
     "LLMResponseError",
     "Provider",
+    "ProviderUnavailableError",
     "SpendTracker",
+    "SystemPrompt",
     "Usage",
     "cost_usd",
     "shared_tracker",

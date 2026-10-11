@@ -98,6 +98,21 @@ covers. Rules:
 - Lexical term weights (`lexeme_stats`) are document frequencies over historical-split
   passages only, so held-out text never shapes how queries are weighted.
 
+## Agent (`causetrace.agent`)
+
+- Model input for the target event is its packet (`get_incident_packet`) and retrieved
+  history passages. The agent package never imports `causetrace.gold` and never names a
+  GOLD_ONLY narrative column; a test checks its source.
+- Every search uses `before_date = corpus_cutoff(ev_date)` and
+  `exclude_event_id = <target>`, with `history_only` left at its default. The retrieve
+  node also re-checks every passage and stops the run if one is from the target event or
+  not earlier than the cutoff.
+- The label taxonomy shown to the model lists only codes that occur as `cm_inPc = 'T'`
+  findings of history-split events, so held-out events cannot add a code to it.
+- Verify checks every citation deterministically (retrieved in this run, dated before the
+  incident and the cutoff) before any LLM support check; only findings with at least one
+  citation judged SUPPORTED are answered.
+
 ## Known limitations
 
 - **Report publication dates.** The exported tables have no final-report date, so a
@@ -115,3 +130,5 @@ covers. Rules:
 - 2026-10-11 — Added "Passages and search" for hybrid retrieval. No class changed.
 - 2026-10-11 — Search caps `before_date` at 2024-01-01 by default (`history_only`), and
   analysis passages are chunked like factual ones. No class changed.
+- 2026-10-11 — Added the agent section; packet narratives get the same heading split as
+  passages (whitespace only, after the leakage gate). No class changed.

@@ -11,6 +11,7 @@ from datetime import date
 from pydantic import BaseModel, ConfigDict
 
 from causetrace.db import Connection, connect
+from causetrace.passages import split_glued_headings
 
 
 class _Packet(BaseModel):
@@ -137,7 +138,8 @@ def get_incident_packet(ev_id: str, conn: Connection | None = None) -> IncidentP
                 series=a[4],
                 phase_of_flight=a[5],
                 damage=a[6],
-                narr_accp=a[7],
+                # Same heading split as passages, so queries and passages tokenize alike.
+                narr_accp=split_glued_headings(a[7]) if a[7] else a[7],
             )
             for a in aircraft
         ],

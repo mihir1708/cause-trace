@@ -1,6 +1,7 @@
 """Runtime configuration from environment variables (and ``.env`` for LLM settings)."""
 
 import os
+from dataclasses import dataclass
 from pathlib import Path
 
 DEFAULT_DATABASE_URL = "postgresql://causetrace:causetrace@localhost:5432/causetrace"
@@ -32,6 +33,9 @@ RERANK_REVISION = (
 # LLM provider (causetrace.llm). The API key and budget come from the environment or .env.
 LLM_MODEL = os.environ.get("CAUSETRACE_LLM_MODEL") or "claude-haiku-5-5"
 DEFAULT_MAX_USD = 10.0
+# Free local fallback (causetrace.llm.ollama_provider).
+OLLAMA_URL = os.environ.get("CAUSETRACE_OLLAMA_URL") or "http://localhost:11434"
+OLLAMA_MODEL = os.environ.get("CAUSETRACE_OLLAMA_MODEL") or "llama3.1:8b"
 
 
 def load_dotenv(path: Path = Path(".env")) -> None:
@@ -55,3 +59,22 @@ def max_usd() -> float:
     """Spend limit per process for LLM calls: ``MAX_USD`` (default 10)."""
     load_dotenv()
     return float(os.environ.get("MAX_USD") or DEFAULT_MAX_USD)
+
+
+@dataclass(frozen=True)
+class AgentLimits:
+    """Hard limits of the multi-hop agent (causetrace.agent); the graph always terminates."""
+
+    max_queries: int = 3  # planned search queries
+    max_extra_hops: int = 1  # gap-query retrievals after check_evidence
+    max_revisions: int = 1  # analyze -> verify -> analyze again
+    max_passages: int = 10  # passages kept after merging all queries
+    max_findings: int = 5  # labels in one answer
+    max_tokens: int = 80_000  # LLM tokens per run (input + output + cache); checked per call
+    rerank_max_words: int = 60  # shorter queries use rrf_rerank, longer ones rrf
+    per_query_top_k: int = 10  # passages fetched per query before merging
+
+
+AGENT_LIMITS = AgentLimits(
+    max_tokens=int(os.environ.get("CAUSETRACE_AGENT_MAX_TOKENS") or AgentLimits.max_tokens)
+)
