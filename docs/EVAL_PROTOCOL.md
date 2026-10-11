@@ -45,6 +45,40 @@ events; `L_i` is the gold label set of the event at rank `i`. Only the top 10 ar
 
 All retrieval metrics are averaged over scored held-out events.
 
+How the held-out retrieval evaluation runs (`scripts/eval_retrieval.py`):
+
+- **Scored events:** held-out events with a non-empty `G` and a non-empty `narr_accp`.
+  `--limit N --seed S` scores a seeded random sample of them instead of all.
+- **Query:** the incident packet text (`causetrace.packets`): the gated factual narratives,
+  or the packet's SAFE metadata when every narrative is withheld. Gold fields never enter
+  the query.
+- **Corpus:** every search uses `before_date = min(ev_date, 2024-01-01)`
+  (`causetrace.split.corpus_cutoff`, the one helper for every evaluation and the agent) and
+  excludes the event itself, so only history events can be returned. Search also enforces
+  this itself: `history_only=True` (the default) caps any `before_date` at 2024-01-01.
+- **Ranked list:** the top 10 *distinct* events (`search_events`); an event that appears
+  more than once counts once, at its first position. The IDCG pool is every history event
+  before `before_date`, label sets counted with multiplicity.
+- **Percentiles:** nearest rank (the smallest value with at least p% of values at or
+  below it).
+
+## Known-item questions
+
+A second retrieval check uses questions written for single history passages.
+
+- **Sampling** (`scripts/draft_questions.py`): 220 passages from events before 2024-01-01,
+  split evenly across section types (factual, analysis, probable cause), proportionally to
+  event year within a section, seed 42.
+- **Drafting:** the LLM (`causetrace.llm`, `claude-haiku-5-5`) writes one question per
+  passage that an investigator might ask and that the passage answers, paraphrased.
+- **Review** (`scripts/review_questions.py`): every draft is kept, edited or dropped by a
+  person. Only kept and edited questions are scored.
+- **Search:** each question is searched with `before_date = 2024-01-01` (history corpus)
+  and nothing excluded, since the source event is the answer.
+- **Recall@10:** share of questions whose source event is among the top 10 distinct events.
+- **MRR:** mean of `1 / rank` of the source event in the top 10 (0 when absent).
+- **p95:** nearest-rank 95th percentile of per-query wall-clock latency.
+
 ## Causal systems
 
 Every system receives only the target event's packet (`causetrace.packets`) and, where
@@ -90,3 +124,7 @@ prior and the closed-book LLM).
   events (with findings and a non-empty `narr_accp`) have gold narratives, so the gate checked
   every scored packet. The gate applies only to target-event packets; history passages used for
   retrieval keep their full narratives.
+- 2026-10-11 — Added how the held-out retrieval evaluation runs (scored events, query,
+  corpus cutoff, distinct events, IDCG pool, percentile method) and the known-item
+  question protocol. These spell out or add definitions before any retrieval results exist;
+  no existing definition changed.

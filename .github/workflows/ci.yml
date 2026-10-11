@@ -42,15 +42,26 @@ jobs:
         with:
           path: ~/.cache/huggingface
           key: hf-models-${{ hashFiles('src/causetrace/config.py') }}
-      # Outside pytest: tests never download. If this fails, the slow test skips.
+      # Outside pytest: tests never download. A failed download fails CI.
       - name: download retrieval models
-        id: models
-        continue-on-error: true
         run: make models
       - name: pytest (including the slow real-model test)
         run: uv run --group ml pytest -rs
       - name: ingest fixtures
         run: make ingest DATA=data/fixtures
       - name: index fixtures
-        if: steps.models.outcome == 'success'
         run: make index
+      # Fails if rrf_rerank Label Recall@10 on the fixture's held-out events drops by more
+      # than 0.02 against artifacts/ci_baseline.json. The run's own numbers are uploaded as a
+      # candidate baseline; change the baseline deliberately with `make update-baseline`.
+      - name: retrieval regression gate
+        run: >-
+          uv run --group ml python scripts/eval_retrieval.py
+          --gate artifacts/ci_baseline.json --write-baseline ci_baseline.candidate.json
+      - name: upload candidate baseline
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ci-baseline-candidate
+          path: ci_baseline.candidate.json
+          if-no-files-found: ignore

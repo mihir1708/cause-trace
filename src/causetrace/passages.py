@@ -1,13 +1,15 @@
 """Build retrieval passages from the ingested narratives.
 
-Per event, one passage per section: ``factual`` (narr_accp, chunked when long),
-``analysis`` (narr_accf) and ``probable_cause`` (narr_cause). Narratives of all aircraft
-of an event are joined (identical texts once). Passages contain GOLD_ONLY text of their
+Per event, one passage per section: ``factual`` (narr_accp) and ``analysis`` (narr_accf),
+both chunked when long, and ``probable_cause`` (narr_cause). Narratives of all aircraft
+of an event are joined (identical texts once), and NTSB section headings glued to the next
+word ("HISTORY OF FLIGHTOn") are split. Passages contain GOLD_ONLY text of their
 own event; search must filter by date and target event (docs/DATA_LEAKAGE.md).
 """
 
 import hashlib
 import math
+import re
 from dataclasses import dataclass
 from datetime import date
 
@@ -18,6 +20,57 @@ CHUNK_OVERLAP = 50
 MAX_SINGLE_CHUNK_WORDS = 400
 
 SECTIONS = (("factual", "narr_accp"), ("analysis", "narr_accf"), ("probable_cause", "narr_cause"))
+CHUNKED_SECTIONS = frozenset({"factual", "analysis"})  # can exceed the 512-token embedder window
+
+# Section headings of NTSB factual narratives. The export often drops the line break after
+# them, gluing the heading to the next word ("HISTORY OF FLIGHTOn", "AIRPORT INFORMATIONhe").
+NTSB_HEADINGS = (
+    "HISTORY OF FLIGHT",
+    "PERSONNEL INFORMATION",
+    "PILOT INFORMATION",
+    "AIRCRAFT INFORMATION",
+    "METEOROLOGICAL INFORMATION",
+    "AIRPORT INFORMATION",
+    "AIDS TO NAVIGATION",
+    "COMMUNICATIONS",
+    "FLIGHT RECORDERS",
+    "WRECKAGE AND IMPACT INFORMATION",
+    "MEDICAL AND PATHOLOGICAL INFORMATION",
+    "FIRE",
+    "SURVIVAL ASPECTS",
+    "TESTS AND RESEARCH",
+    "ORGANIZATIONAL AND MANAGEMENT INFORMATION",
+    "ADDITIONAL INFORMATION",
+    "INJURIES TO PERSONS",
+    "DAMAGE TO AIRCRAFT",
+    "OTHER DAMAGE",
+)
+# "FIRE" begins real uppercase words (FIREFIGHTING, FIREWALL), so it splits only before a
+# capitalized word or lowercase letters; the other headings split before any letter or digit
+# ("PERSONNEL INFORMATIONA review", "AIRPORT INFORMATIONN93AA").
+_PREFIX_HEADINGS = frozenset({"FIRE"})
+
+
+def _heading_pattern(headings: list[str], lookahead: str) -> str:
+    alternatives = sorted(headings, key=len, reverse=True)
+    return (
+        r"(?<![A-Za-z])("
+        + "|".join(r"\s+".join(map(re.escape, h.split())) for h in alternatives)
+        + r")"
+        + lookahead
+    )
+
+
+_GLUED_HEADING = re.compile(
+    _heading_pattern([h for h in NTSB_HEADINGS if h not in _PREFIX_HEADINGS], r"(?=[A-Za-z0-9])")
+    + "|"
+    + _heading_pattern(sorted(_PREFIX_HEADINGS), r"(?=[A-Z][a-z]|[a-z])")
+)
+
+
+def split_glued_headings(text: str) -> str:
+    """Insert a space after an NTSB heading glued to the next word."""
+    return _GLUED_HEADING.sub(lambda m: (m.group(1) or m.group(2)) + " ", text)
 
 
 @dataclass(frozen=True)
@@ -98,8 +151,11 @@ def generate_passages(conn: Connection) -> list[Passage]:
     for ev_id, ev_date, category, phase, accp, accf, cause in conn.execute(_SOURCE_SQL):
         texts = {"factual": accp, "analysis": accf, "probable_cause": cause}
         for section, _ in SECTIONS:
-            content = _join_distinct(texts[section])
-            chunks = chunk_words(content) if section == "factual" else [content] if content else []
+            content = split_glued_headings(_join_distinct(texts[section]))
+            if section in CHUNKED_SECTIONS:
+                chunks = chunk_words(content)
+            else:
+                chunks = [content] if content else []
             for i, chunk in enumerate(chunks):
                 passages.append(
                     Passage(

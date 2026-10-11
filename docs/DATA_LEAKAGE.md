@@ -81,15 +81,18 @@ Constraints:
 ## Passages and search
 
 `passages` (built by `make index`) holds, per event, the factual narrative (raw
-`narr_accp`, chunked), the analysis (`narr_accf`) and the probable cause (`narr_cause`). It
-therefore contains GOLD_ONLY text of every event it covers. Rules:
+`narr_accp`) and the analysis (`narr_accf`), both chunked when longer than 400 words, and
+the probable cause (`narr_cause`). It therefore contains GOLD_ONLY text of every event it
+covers. Rules:
 
 - `causetrace.retrieval.search` / `search_events` filter `event_date < before_date` and
   `event_id <> exclude_event_id` in the SQL of every candidate query (dense and lexical),
   so fusion and reranking only ever see allowed passages. Tests check every mode.
-- `before_date` is a required argument. For a held-out target, pass
-  `before_date = 2024-01-01` (history only, per `docs/EVAL_PROTOCOL.md`) and
-  `exclude_event_id = <target ev_id>`. Pass `None` only outside evaluation.
+- `before_date` is a required argument. With `history_only=True` (the default) it is
+  capped at 2024-01-01 (`causetrace.split.corpus_cutoff`), so search returns history
+  passages only whatever date is passed. Only an explicit `history_only=False` lifts the
+  cap; evaluations and the agent never pass it. For a target event pass
+  `before_date = corpus_cutoff(ev_date)` and `exclude_event_id = <target ev_id>`.
 - The query for a target event is built from its packet only (SAFE fields and
   `narr_accp_safe`), never from its passages.
 - Lexical term weights (`lexeme_stats`) are document frequencies over historical-split
@@ -110,3 +113,5 @@ therefore contains GOLD_ONLY text of every event it covers. Rules:
 
 - 2026-10-11 — Initial version.
 - 2026-10-11 — Added "Passages and search" for hybrid retrieval. No class changed.
+- 2026-10-11 — Search caps `before_date` at 2024-01-01 by default (`history_only`), and
+  analysis passages are chunked like factual ones. No class changed.
