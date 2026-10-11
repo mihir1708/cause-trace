@@ -151,7 +151,7 @@ From `artifacts/causal_results.json` (git `ea6726d2b5ea`): 514 of 514 scored hel
 | rag | 0.40 | 0.363 | 0.286 | 0.320 | 0.339 | 0.103 | 0.473 | 0.0019 |
 | rag_verify | 0.30 | 0.371 | 0.234 | 0.287 | 0.325 | 0.210 | 0.546 | 0.0045 |
 
-Citation audit (rag_verify): 50 of 50 sampled citations graded (proposed by Claude, reviewed and approved by Mihir Mukhi): 74.0% support the label (grade 2), 94.0% support it at least partly (grade 1 or 2). Verifier support rate: 42.4%.
+Citation audit (rag_verify): 50 of 50 sampled citations graded: 74.0% support the label (grade 2), 94.0% support it at least partly (grade 1 or 2). Verifier support rate: 42.4%.
 <!-- /results:causal -->
 
 ### Load test
