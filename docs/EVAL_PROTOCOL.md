@@ -231,3 +231,8 @@ How these are computed (`causetrace.evaluation.causal_metrics`):
   results alone. The pilot's numbers are not reported as results. No prompt changed (prompt hashes are recorded in
   every cached result and in the cache key, so a later prompt change made from dev results
   would show up as new results and needs its own dated note here).
+- 2026-10-11 — Citation audit (`evals/citation_audit.csv`, 50 rag_verify citations): the grades
+  were proposed by Claude in a Claude Code session, which read each incident packet next to
+  the cited passage, and were reviewed and approved as a list by Mihir Mukhi (project owner)
+  rather than typed one at a time. The audit therefore checks the verifier against a
+  Claude-proposed grading reviewed and approved by Mihir Mukhi, not a fully independent human one. No other definition changed.
