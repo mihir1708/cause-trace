@@ -1,0 +1,8 @@
+data/raw/
+data/interim/
+.env
+.venv/
+__pycache__/
+# stray copies of the NTSB download at repo root
+/avall.zip
+/avall.mdb
