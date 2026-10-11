@@ -15,6 +15,9 @@ cp .env.example .env
 uv sync
 make up                          # PostgreSQL 16 + pgvector
 make ingest DATA=data/fixtures   # 300-event fixture; report in artifacts/ingest_report.json
+uv sync --group ml               # sentence-transformers + torch for retrieval
+make models                      # download the embedding and reranking models
+make index                       # passages + embeddings; resumes if interrupted
 make check                       # ruff, mypy, pytest
 ```
 

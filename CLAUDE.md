@@ -42,10 +42,15 @@ retrieval over earlier investigations. Leakage control is the core requirement. 
 ## Layout
 
 - `src/causetrace/` — package (`config`, `db`, `migrate`, `ingest`, `models`, `leakage`,
-  `packets`, `gold`, `split`; SQL in `migrations/`).
+  `packets`, `gold`, `split`, `passages`, `embeddings`, `rerank`, `retrieval`, `index`;
+  SQL in `migrations/`).
+- Retrieval models (sentence-transformers, torch) are in the optional `ml` dependency
+  group: `uv sync --group ml`. Tests use fakes (`tests/fakes.py`); the one `slow` test
+  loads real models from the local Hugging Face cache only and skips when absent.
 - `tests/` — pytest; needs PostgreSQL at `TEST_DATABASE_URL`
   (default `postgresql://causetrace:causetrace@localhost:5432/causetrace_test`).
-- `scripts/` — `make_fixture.py`, `session_start.sh` (cloud SessionStart hook).
+- `scripts/` — `make_fixture.py`, `session_start.sh` (cloud SessionStart hook),
+  `download_models.py`.
 - `docs/`, `data/fixtures/`, `data/raw/` (gitignored), `artifacts/`, `evals/`, `loadtests/`.
 
 ## Commands
@@ -54,6 +59,8 @@ retrieval over earlier investigations. Leakage control is the core requirement. 
 make up                       # PostgreSQL 16 + pgvector via docker compose (local)
 make migrate                  # apply SQL migrations to DATABASE_URL
 make ingest DATA=data/fixtures  # load mdb-export CSVs, write artifacts/ingest_report.json
+make models                   # download retrieval models into the HF cache (network)
+make index                    # passages, lexical stats, embeddings (resumable)
 make check                    # ruff, mypy, pytest
 make down
 ```

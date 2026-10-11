@@ -3,7 +3,7 @@ DATA ?= data/raw
 -include .env
 export
 
-.PHONY: up down migrate ingest check
+.PHONY: up down migrate ingest index models check
 
 up:
 	docker compose up -d --wait
@@ -16,6 +16,12 @@ migrate:
 
 ingest: migrate
 	uv run python -m causetrace.ingest --data $(DATA) --report artifacts/ingest_report.json
+
+index: migrate
+	uv run --group ml python -m causetrace.index
+
+models:
+	uv run --group ml python scripts/download_models.py
 
 check:
 	uv run ruff check .

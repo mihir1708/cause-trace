@@ -15,6 +15,9 @@ dev = [
     "pytest>=8.3",
     "ruff>=0.6",
 ]
+ml = [
+    "sentence-transformers>=3.0",
+]
 
 [build-system]
 requires = ["uv_build>=0.8,<0.12"]
@@ -39,6 +42,12 @@ warn_unused_configs = true
 module = "causetrace.*"
 strict = true
 
+# Optional `ml` dependency group; absent in a default `uv sync`.
+[[tool.mypy.overrides]]
+module = ["sentence_transformers.*", "torch.*"]
+ignore_missing_imports = true
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-ra"
+markers = ["slow: runs the real retrieval models (skips when they are not cached)"]
