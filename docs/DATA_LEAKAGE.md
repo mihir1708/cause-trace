@@ -121,6 +121,14 @@ covers. Rules:
   and exclude the target.
 - The target's gold labels are read through `causetrace.gold` for scoring only, as are the
   gold labels of cited history events for citation support.
+- **Dev split** (`--split dev`, 2023 history events used to tune the LLM systems'
+  confidence cut-offs): a dev case gets its packet only, and every search and the
+  random-context draw use its own cutoff (`corpus_cutoff(ev_date)`, its own date) and
+  exclude it, so only earlier events are shown. Its gold labels are read for scoring and
+  tuning only. Two history-wide inputs are not re-cut per dev case: the taxonomy shown to
+  the model (codes from all history events, which can include the case's own codes) and
+  the lexical term weights (all history passages). Both are label lists or corpus
+  statistics, not text or labels tied to the case, and neither touches held-out events.
 
 ## Known limitations
 
@@ -142,3 +150,4 @@ covers. Rules:
 - 2026-10-11 — Added the agent section; packet narratives get the same heading split as
   passages (whitespace only, after the leakage gate). No class changed.
 - 2026-10-11 — Added the causal evaluation section. No class changed.
+- 2026-10-11 — Added the dev split to the causal evaluation section. No class changed.

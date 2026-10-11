@@ -135,6 +135,24 @@ How the causal comparison runs (`scripts/eval_causal.py`):
 - LLM systems call `claude-haiku-5-5` through `AnthropicProvider` directly (no fallback);
   `--model` adds rows for another model on the same cases; `--repeat R` reports the mean
   and the range over R runs.
+- **Dev split** (`--split dev`): the LLM systems run on the tuning set (2023 history events
+  with gold labels and a non-empty `narr_accp`). `--cases N` samples N with a fixed seed;
+  the list is frozen in `evals/causal_dev_cases.json`. Each dev case is handled exactly like
+  a held-out case but with its own cutoff, `corpus_cutoff(ev_date)` (its own date): all
+  retrieval and the random-context draw use passages of earlier events only, and the case
+  itself is excluded. Dev results are cached in `artifacts/runs/dev/` and reported in
+  `artifacts/causal_dev_results.{json,md}`, never in the held-out report. The frequency
+  prior and the kNN vote are shown there for reference only (they are tuned on these
+  events).
+- **Confidence cut-off** (closed-book, random-context, RAG agent, RAG agent + verifier):
+  only findings with confidence at least `tau` are kept; a case left with none is an
+  abstention. `tau` is chosen per system and model from 0.05–0.95 (step 0.05, the kNN
+  grid) by micro F1 over the frozen dev cases (repeats pooled; ties: lower `tau`), and only
+  once every dev case has a result. The raw findings and confidences are cached, so the
+  cut-off is applied when scoring and tuning needs no new LLM calls. The held-out report
+  applies the tuned `tau` and records it with the dev micro F1 with and without it;
+  without a complete dev run it applies no cut-off and says so. The citation audit is
+  sampled only from RAG agent + verifier answers scored with a tuned cut-off.
 
 ## Causal metrics
 
@@ -205,3 +223,11 @@ How these are computed (`causetrace.evaluation.causal_metrics`):
   draw, empty predictions as abstentions, answered-only F1, citation validity and support
   per passage, verifier support rate, human citation audit). No causal results existed yet;
   no existing definition changed.
+- 2026-10-11 — A 20-case held-out pilot of the causal comparison was run before any
+  tuning. It showed low micro precision for the LLM systems, which predicted too many
+  labels, while the kNN vote (cut-off tuned on 2023 events) scored a higher F1. Held-out
+  results must not drive changes, so all tuning that followed used 2023 history events
+  only: the dev split and the per-system confidence cut-off above were added, tuned on dev
+  results alone. The pilot's numbers are not reported as results. No prompt changed (prompt hashes are recorded in
+  every cached result and in the cache key, so a later prompt change made from dev results
+  would show up as new results and needs its own dated note here).

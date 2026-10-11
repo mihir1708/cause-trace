@@ -5,8 +5,12 @@ under a key of (case, repeat, config hash); a rerun skips what is cached. LLM sy
 ``AnthropicProvider`` directly (no fallback), so one run never mixes models; when Claude is
 unavailable or MAX_USD is reached the run stops and can be resumed.
 
-Usage: python scripts/eval_causal.py [--cases N] [--systems ...] [--limit N] [--model M]
-       [--repeat R] [--workers N]
+``--split dev`` runs the LLM systems on 2023 history events instead (the tuning set) and
+writes ``artifacts/causal_dev_results.*``; their results tune each LLM system's confidence
+cut-off, which the held-out report then applies to cached results without new calls.
+
+Usage: python scripts/eval_causal.py [--split dev] [--cases N] [--systems ...] [--limit N]
+       [--model M] [--repeat R] [--workers N]
 """
 
 import argparse
@@ -18,6 +22,7 @@ from collections.abc import Callable, Mapping, Sequence
 from concurrent.futures import FIRST_EXCEPTION, Future, ThreadPoolExecutor, wait
 from dataclasses import dataclass, field
 from datetime import date
+from functools import partial
 from pathlib import Path
 from typing import Any
 
@@ -36,6 +41,7 @@ from causetrace.evaluation.causal_systems import (
     FREE_SYSTEMS,
     KNN_K,
     KNN_MODE,
+    LLM_SYSTEMS,
     SYSTEMS,
     ClosedBook,
     FrequencyPrior,
@@ -44,8 +50,12 @@ from causetrace.evaluation.causal_systems import (
     RagVerify,
     RandomContext,
     System,
+    apply_cutoff,
     knn_neighbours,
+    knn_predict,
+    micro_f1,
     sha256_json,
+    tune_confidence,
     tune_tau,
 )
 from causetrace.evaluation.citation_audit import (
@@ -61,9 +71,21 @@ from causetrace.retrieval import Retriever
 from causetrace.split import HELD_OUT_FROM, corpus_cutoff
 
 DEFAULT_CASES = Path("evals/causal_cases.json")
+DEFAULT_DEV_CASES = Path("evals/causal_dev_cases.json")
 DEFAULT_RUNS = Path("artifacts/runs")
 DEFAULT_JSON = Path("artifacts/causal_results.json")
 DEFAULT_MD = Path("artifacts/causal_results.md")
+DEFAULT_DEV_JSON = Path("artifacts/causal_dev_results.json")
+DEFAULT_DEV_MD = Path("artifacts/causal_dev_results.md")
+DEV_RUNS = "dev"  # dev results live in <runs-dir>/dev, apart from held-out results
+HELD_OUT_DESCRIPTION = (
+    "Held-out events with gold labels and narr_accp (docs/EVAL_PROTOCOL.md); "
+    "frozen for the causal comparison."
+)
+DEV_DESCRIPTION = (
+    "2023 history events with gold labels and narr_accp (the tuning set, "
+    "docs/EVAL_PROTOCOL.md); frozen for tuning the LLM systems' confidence cut-offs."
+)
 TUNING_FROM = date(2023, 1, 1)
 DEFAULT_SEED = 42
 
@@ -75,7 +97,12 @@ RetrieverFactory = Callable[[Connection], Retriever]
 
 
 def freeze_cases(
-    path: Path, scored: Sequence[str], n: int | None, seed: int, refreeze: bool = False
+    path: Path,
+    scored: Sequence[str],
+    n: int | None,
+    seed: int,
+    refreeze: bool = False,
+    description: str = HELD_OUT_DESCRIPTION,
 ) -> list[str]:
     """The frozen case list: reuse ``path`` when it matches the request, else write it."""
     if path.is_file() and not refreeze:
@@ -98,8 +125,7 @@ def freeze_cases(
     path.write_text(
         json.dumps(
             {
-                "description": "Held-out events with gold labels and narr_accp "
-                "(docs/EVAL_PROTOCOL.md); frozen for the causal comparison.",
+                "description": description,
                 "seed": seed,
                 "n_requested": n,
                 "n_scored": len(scored),
@@ -366,29 +392,15 @@ def render_markdown(report: Mapping[str, Any]) -> str:
         f"- frequency_prior: k = {report['tuning']['frequency_prior_k']}; knn_vote: cut-off "
         f"{report['tuning']['knn_tau']} (tuned on {report['tuning']['n_events']} 2023 events, "
         f"micro F1); retrieval `{report['retrieval']}`",
+        *_cutoff_lines(report["tuning"]),
         f"- LLM cost in this report: ${report['total_cost_usd']:.4f}",
         "",
         "Abstentions count as empty predictions in P/R/F1; *F1 answered* uses answered cases "
-        "only. ± is half the range over repeats.",
+        "only. ± is half the range over repeats. *Cut-off*: LLM findings with a lower "
+        "confidence are dropped (tuned on the dev split).",
         "",
-        "| System | Model | Cases | Micro P | Micro R | Micro F1 | F1 answered | Macro F1 "
-        "| Recovered | Abstain | Cit. valid | Cit. support | Verifier | Tokens | Calls | s | $ |",
-        "|" + "---|" * 17,
+        *_table(report["rows"]),
     ]
-    for row in report["rows"]:
-        scope = row["n_cases"] if row["complete"] else f"{row['n_cases']} of {row['n_expected']}"
-        if row.get("scope") == "all":
-            scope = f"{scope} (all)"
-        out.append(
-            f"| {row['system']} | {row['model']} | {scope} | {_fmt(row, 'micro_precision')} "
-            f"| {_fmt(row, 'micro_recall')} | {_fmt(row, 'micro_f1')} "
-            f"| {_fmt(row, 'micro_f1_answered')} | {_fmt(row, 'macro_f1')} "
-            f"| {_fmt(row, 'recovered', 0)} of {row['gold_findings']} "
-            f"| {_fmt(row, 'abstention_rate')} | {_fmt(row, 'citation_validity')} "
-            f"| {_fmt(row, 'citation_support')} | {_fmt(row, 'verifier_support_rate')} "
-            f"| {_fmt(row, 'mean_tokens', 0)} | {_fmt(row, 'mean_calls', 1)} "
-            f"| {_fmt(row, 'mean_seconds', 1)} | {_fmt(row, 'mean_cost_usd', 4)} |"
-        )
     audit = report.get("citation_audit")
     out += ["", "## Citation audit (rag_verify)", ""]
     if audit and audit["graded"]:
@@ -408,6 +420,90 @@ def render_markdown(report: Mapping[str, Any]) -> str:
     if report.get("stopped"):
         out += ["", f"**Run stopped:** {report['stopped']} (resume by running again)."]
     return "\n".join(out) + "\n"
+
+
+def _cutoff_lines(tuning: Mapping[str, Any]) -> list[str]:
+    """One line per LLM system and model: its tuned cut-off and its dev scores."""
+    dev = tuning["dev_cases"]
+    out = []
+    for key, c in sorted(tuning["llm_cutoffs"].items()):
+        if c["tau"] is None:
+            out.append(
+                f"- {key}: no cut-off (dev run incomplete: {c['dev_done']} of "
+                f"{c['dev_cases']} dev cases)"
+            )
+        else:
+            out.append(
+                f"- {key}: cut-off {c['tau']} (dev micro F1 {c['dev_micro_f1']:.3f}, "
+                f"{c['dev_micro_f1_raw']:.3f} without; {c['dev_cases']} dev cases, "
+                f"`{dev['path']}`)"
+            )
+    if not out:
+        out.append("- LLM systems: no cut-off (no dev results; run `--split dev` first)")
+    return out
+
+
+def render_dev_markdown(report: Mapping[str, Any]) -> str:
+    tuning = report["tuning"]
+    out = [
+        "# Causal systems on the dev split (2023 history events)",
+        "",
+        "Generated by `scripts/eval_causal.py --split dev`; do not edit by hand. These are "
+        "tuning results, not held-out results.",
+        "",
+        f"- Git SHA: `{report['git_sha']}`",
+        f"- Cases: {report['cases']['n']} of {report['cases']['n_scored']} 2023 events with "
+        f"gold labels and narr_accp (`{report['cases']['path']}`, seed {report['cases']['seed']})"
+        "; each searched before its own date, itself excluded",
+        f"- Taxonomy: {report['taxonomy']['codes']} codes; gold labels outside it: "
+        f"{report['taxonomy']['gold_outside_cases']['labels']} in "
+        f"{report['taxonomy']['gold_outside_cases']['cases']} cases",
+        *_cutoff_lines(tuning),
+        f"- LLM cost in this report: ${report['total_cost_usd']:.4f}",
+        "",
+        "LLM systems are shown with their tuned cut-off and without one (cut-off `-`). "
+        "frequency_prior and knn_vote were tuned on these events and are shown for reference.",
+        "",
+        *_table(report["rows"]),
+    ]
+    grids = [(k, c["scores"]) for k, c in sorted(tuning["llm_cutoffs"].items()) if c["scores"]]
+    if grids:
+        out += ["", "## Dev micro F1 by cut-off", ""]
+        taus = sorted(grids[0][1])
+        out.append("| System | " + " | ".join(str(t) for t in taus) + " |")
+        out.append("|" + "---|" * (len(taus) + 1))
+        for key, scores in grids:
+            out.append(f"| {key} | " + " | ".join(f"{scores[t]:.3f}" for t in taus) + " |")
+    if report.get("stopped"):
+        out += ["", f"**Run stopped:** {report['stopped']} (resume by running again)."]
+    return "\n".join(out) + "\n"
+
+
+def _table(rows: Sequence[Mapping[str, Any]]) -> list[str]:
+    out = [
+        "| System | Model | Cut-off | Cases | Micro P | Micro R | Micro F1 | F1 answered "
+        "| Macro F1 | Recovered | Abstain | Cit. valid | Cit. support | Verifier | Tokens "
+        "| Calls | s | $ |",
+        "|" + "---|" * 18,
+    ]
+    for row in rows:
+        scope = row["n_cases"] if row["complete"] else f"{row['n_cases']} of {row['n_expected']}"
+        if row.get("scope") == "all":
+            scope = f"{scope} (all)"
+        elif str(row.get("scope", "")).startswith("dev ("):
+            scope = f"{scope} ({row['scope'][5:-1]})"
+        out.append(
+            f"| {row['system']} | {row['model']} | {_fmt(row, 'cutoff', 2)} | {scope} "
+            f"| {_fmt(row, 'micro_precision')} "
+            f"| {_fmt(row, 'micro_recall')} | {_fmt(row, 'micro_f1')} "
+            f"| {_fmt(row, 'micro_f1_answered')} | {_fmt(row, 'macro_f1')} "
+            f"| {_fmt(row, 'recovered', 0)} of {row['gold_findings']} "
+            f"| {_fmt(row, 'abstention_rate')} | {_fmt(row, 'citation_validity')} "
+            f"| {_fmt(row, 'citation_support')} | {_fmt(row, 'verifier_support_rate')} "
+            f"| {_fmt(row, 'mean_tokens', 0)} | {_fmt(row, 'mean_calls', 1)} "
+            f"| {_fmt(row, 'mean_seconds', 1)} | {_fmt(row, 'mean_cost_usd', 4)} |"
+        )
+    return out
 
 
 def _pct(value: float | None) -> str:
@@ -437,11 +533,15 @@ def build_rows(
     history_gold: Mapping[str, frozenset[str]],
     cutoffs: Mapping[str, date],
     repeats: int,
+    taus: Mapping[str, float | None] | None = None,
 ) -> tuple[list[dict[str, Any]], dict[str, list[dict[str, Any]]], float]:
     """Score every (system, model) with cached results under the current configuration.
 
-    Returns the rows, rag_verify answers (repeat 0) per model, and the total LLM cost of the
-    case results in the report.
+    ``taus`` maps ``"<system>__<model>"`` to the confidence cut-off applied to that LLM
+    system's cached results before scoring (missing or None: no cut-off).
+
+    Returns the rows, rag_verify answers (repeat 0, after the cut-off) per model, and the
+    total LLM cost of the case results in the report.
     """
     rows: list[dict[str, Any]] = []
     answers: dict[str, list[dict[str, Any]]] = {}
@@ -456,6 +556,8 @@ def build_rows(
             records = [
                 r for r in cache.load(name, model).values() if r["config_hash"] == config_hash
             ]
+            tau = (taus or {}).get(cutoff_key(name, model)) if name in LLM_SYSTEMS else None
+            records = [apply_cutoff(r, tau) for r in records]
             if name not in FREE_SYSTEMS:
                 in_cases = set(cases)
                 total_cost += sum(
@@ -496,12 +598,64 @@ def build_rows(
                 row.update(
                     system=name,
                     model=model,
+                    cutoff=tau,
                     scope=scope,
                     n_expected=len(ev_ids),
                     complete=n_done == len(ev_ids) and len(per_repeat) == n_rep,
                 )
                 rows.append(row)
     return rows, answers, total_cost
+
+
+def cutoff_key(system: str, model: str) -> str:
+    return f"{system}__{model}"
+
+
+def tune_llm_cutoffs(
+    dev_cache: ResultCache,
+    systems: Mapping[str, System],
+    dev_cases: Sequence[str],
+    gold: Mapping[str, frozenset[str]],
+) -> dict[str, dict[str, Any]]:
+    """Tune each LLM system's confidence cut-off on its cached dev results (micro F1).
+
+    Only results under the system's current configuration count, and only a complete dev
+    run (every frozen dev case answered at least once) is tuned; otherwise ``tau`` is None
+    and no cut-off is applied. Repeats are pooled.
+    """
+    wanted = set(dev_cases)
+    out: dict[str, dict[str, Any]] = {}
+    for name in LLM_SYSTEMS:
+        system = systems.get(name)
+        if system is None:
+            continue
+        config_hash = sha256_json(system.config())
+        for model in dev_cache.models(name):
+            records = [
+                r
+                for r in dev_cache.load(name, model).values()
+                if r["config_hash"] == config_hash and r["ev_id"] in wanted
+            ]
+            if not records:
+                continue
+            done = {r["ev_id"] for r in records if r["repeat"] == 0}
+            entry: dict[str, Any] = {
+                "system": name,
+                "model": model,
+                "dev_cases": len(wanted),
+                "dev_done": len(done),
+                "tau": None,
+                "dev_micro_f1": None,
+                "dev_micro_f1_raw": micro_f1(
+                    [(set(r.get("labels") or []), gold[r["ev_id"]]) for r in records]
+                ),
+                "scores": {},
+            }
+            if done == wanted:
+                tau, scores = tune_confidence(records, gold)
+                entry.update(tau=tau, dev_micro_f1=scores[tau], scores=scores)
+            out[cutoff_key(name, model)] = entry
+    return out
 
 
 def main(
@@ -511,6 +665,12 @@ def main(
     retriever_factory: RetrieverFactory | None = None,
 ) -> int:
     parser = argparse.ArgumentParser(description="Compare the causal systems.")
+    parser.add_argument(
+        "--split",
+        choices=("held_out", "dev"),
+        default="held_out",
+        help="dev: run the LLM systems on 2023 history events to tune their cut-offs",
+    )
     parser.add_argument("--cases", type=int, default=None, help="sample N cases (default all)")
     parser.add_argument("--refreeze", action="store_true", help="replace the frozen case list")
     parser.add_argument("--seed", type=int, default=DEFAULT_SEED)
@@ -522,14 +682,19 @@ def main(
     parser.add_argument("--tune-limit", type=int, default=None, help="2023 events for tuning")
     parser.add_argument("--report-only", action="store_true")
     parser.add_argument("--cases-path", type=Path, default=DEFAULT_CASES)
+    parser.add_argument("--dev-cases-path", type=Path, default=DEFAULT_DEV_CASES)
     parser.add_argument("--runs-dir", type=Path, default=DEFAULT_RUNS)
-    parser.add_argument("--out-json", type=Path, default=DEFAULT_JSON)
-    parser.add_argument("--out-md", type=Path, default=DEFAULT_MD)
+    parser.add_argument("--out-json", type=Path, default=None)
+    parser.add_argument("--out-md", type=Path, default=None)
     parser.add_argument("--audit", type=Path, default=DEFAULT_AUDIT)
     parser.add_argument("--database-url", default=None)
     args = parser.parse_args(argv)
+    dev = args.split == "dev"
+    out_json = args.out_json or (DEFAULT_DEV_JSON if dev else DEFAULT_JSON)
+    out_md = args.out_md or (DEFAULT_DEV_MD if dev else DEFAULT_MD)
 
     cache = ResultCache(args.runs_dir)
+    dev_cache = ResultCache(args.runs_dir / DEV_RUNS)
     tracker = SpendTracker(max_usd=max_usd())
     make_retriever = retriever_factory or default_retriever_factory()
     workers = Workers(args.database_url, make_retriever)
@@ -537,13 +702,25 @@ def main(
     with connect(args.database_url) as conn:
         scored_rows = scored_held_out_events(conn)
         scored = [ev for ev, _ in scored_rows]
-        cases = freeze_cases(args.cases_path, scored, args.cases, args.seed, args.refreeze)
         gold = get_all_gold_labels(conn)
         dates: dict[str, date] = dict(conn.execute("SELECT ev_id, ev_date FROM events").fetchall())
         history_gold = {ev: g for ev, g in gold.items() if dates[ev] < HELD_OUT_FROM}
-        cutoffs = {ev: corpus_cutoff(dates[ev]) for ev in scored}
         taxonomy = load_taxonomy(conn)
         tuning = tuning_events(conn, args.tune_limit, args.seed)
+        dev_cases = (
+            freeze_cases(
+                args.dev_cases_path, tuning, args.cases, args.seed, args.refreeze, DEV_DESCRIPTION
+            )
+            if dev
+            else _frozen(args.dev_cases_path)
+        )
+        cases = (
+            dev_cases
+            if dev
+            else freeze_cases(args.cases_path, scored, args.cases, args.seed, args.refreeze)
+        )
+        # Each case's own history-only cutoff: its date for a 2023 dev case, 2024-01-01 else.
+        cutoffs = {ev: corpus_cutoff(dates[ev]) for ev in {*scored, *cases}}
 
         prior = FrequencyPrior(history_gold, dates, tuning, HELD_OUT_FROM, TUNING_FROM)
         systems: dict[str, System] = {"frequency_prior": prior}
@@ -577,9 +754,9 @@ def main(
             llm_cases = cases[: args.limit] if args.limit is not None else cases
             for name in args.systems:
                 system = systems.get(name)
-                if system is None:
-                    continue
-                done = cache.load(name, system.model)
+                if system is None or (dev and name in FREE_SYSTEMS):
+                    continue  # the free systems are tuned on the dev events: nothing to run
+                done = (dev_cache if dev else cache).load(name, system.model)
                 config_hash = sha256_json(system.config())
                 ev_ids = scored if name in FREE_SYSTEMS else llm_cases
                 reps = 1 if name in FREE_SYSTEMS else args.repeat
@@ -590,54 +767,165 @@ def main(
                     if (ev, rep, config_hash) not in done
                 ]
             print(f"{len(tasks)} case runs to do; MAX_USD ${tracker.max_usd:.2f}")
-            stopped = run_tasks(tasks, workers, cache, tracker, args.workers)
+            stopped = run_tasks(tasks, workers, dev_cache if dev else cache, tracker, args.workers)
             print(
                 f"LLM spend this run: ${tracker.spent_usd:.4f}"
                 + (f"; stopped: {stopped}" if stopped else "")
             )
 
-        rows, answers, total_cost = build_rows(
-            conn, systems, cache, cases, scored, gold, history_gold, cutoffs, max(1, args.repeat)
-        )
-        verify_row = next(
-            (r for r in rows if r["system"] == "rag_verify" and r["model"] == args.model), None
-        )
-        # Sample only from a complete rag_verify run, so early cases are not over-represented.
-        if verify_row is not None and verify_row["complete"]:
-            write_audit_sample(args.audit, answers[args.model], taxonomy, args.seed)
-        verifier_rate = verify_row.get("verifier_support_rate") if verify_row else None
-        report = {
-            "git_sha": git_sha(),
-            "cases": {
-                "n": len(cases),
-                "n_scored": len(scored),
-                "path": str(args.cases_path),
-                "seed": args.seed,
-            },
-            "taxonomy": {
-                "codes": len(taxonomy),
-                "gold_outside_cases": gold_outside({ev: gold[ev] for ev in cases}, taxonomy),
-                "gold_outside_all": gold_outside({ev: gold[ev] for ev in scored}, taxonomy),
-            },
-            "tuning": {
-                "n_events": len(tuning),
-                "frequency_prior_k": prior.k,
-                "frequency_prior_f1": prior.tuning_f1,
-                "knn_tau": tau,
-                "knn_tau_f1": tau_scores,
-            },
-            "retrieval": retrieval_config,
-            "rows": rows,
-            "total_cost_usd": total_cost,
-            "citation_audit": audit_summary(args.audit, verifier_rate),
-            "stopped": stopped,
+        llm_cutoffs = tune_llm_cutoffs(dev_cache, systems, dev_cases, gold)
+        taus = {k: v["tau"] for k, v in llm_cutoffs.items()}
+        tuning_report = {
+            "n_events": len(tuning),
+            "frequency_prior_k": prior.k,
+            "frequency_prior_f1": prior.tuning_f1,
+            "knn_tau": tau,
+            "knn_tau_f1": tau_scores,
+            "dev_cases": {"n": len(dev_cases), "path": str(args.dev_cases_path)},
+            "llm_cutoffs": llm_cutoffs,
         }
+        if dev:
+            llm_systems = {n: s for n, s in systems.items() if n in LLM_SYSTEMS}
+            run = partial(
+                build_rows,
+                conn,
+                llm_systems,
+                dev_cache,
+                cases,
+                cases,
+                gold,
+                history_gold,
+                cutoffs,
+                max(1, args.repeat),
+            )
+            raw_rows, _, total_cost = run()
+            tuned_rows, _, _ = run(taus)
+            rows = [r for r in tuned_rows if r["cutoff"] is not None] + raw_rows
+            rows += _dev_reference_rows(
+                prior, systems.get("knn_vote"), neighbours, cases, gold, history_gold, cutoffs
+            )
+            report: dict[str, Any] = {
+                "split": "dev",
+                "git_sha": git_sha(),
+                "cases": {
+                    "n": len(cases),
+                    "n_scored": len(tuning),
+                    "path": str(args.dev_cases_path),
+                    "seed": args.seed,
+                },
+                "taxonomy": {
+                    "codes": len(taxonomy),
+                    "gold_outside_cases": gold_outside({ev: gold[ev] for ev in cases}, taxonomy),
+                },
+                "tuning": tuning_report,
+                "retrieval": retrieval_config,
+                "rows": sorted(rows, key=_row_order),
+                "total_cost_usd": total_cost,
+                "stopped": stopped,
+            }
+        else:
+            rows, answers, total_cost = build_rows(
+                conn,
+                systems,
+                cache,
+                cases,
+                scored,
+                gold,
+                history_gold,
+                cutoffs,
+                max(1, args.repeat),
+                taus,
+            )
+            verify_row = next(
+                (r for r in rows if r["system"] == "rag_verify" and r["model"] == args.model),
+                None,
+            )
+            # Sample only from a complete rag_verify run with its tuned cut-off, so early
+            # cases are not over-represented and the audit grades the reported answers.
+            if verify_row is not None and verify_row["complete"] and verify_row["cutoff"]:
+                write_audit_sample(args.audit, answers[args.model], taxonomy, args.seed)
+            verifier_rate = verify_row.get("verifier_support_rate") if verify_row else None
+            report = {
+                "split": "held_out",
+                "git_sha": git_sha(),
+                "cases": {
+                    "n": len(cases),
+                    "n_scored": len(scored),
+                    "path": str(args.cases_path),
+                    "seed": args.seed,
+                },
+                "taxonomy": {
+                    "codes": len(taxonomy),
+                    "gold_outside_cases": gold_outside({ev: gold[ev] for ev in cases}, taxonomy),
+                    "gold_outside_all": gold_outside({ev: gold[ev] for ev in scored}, taxonomy),
+                },
+                "tuning": tuning_report,
+                "retrieval": retrieval_config,
+                "rows": rows,
+                "total_cost_usd": total_cost,
+                "citation_audit": audit_summary(args.audit, verifier_rate),
+                "stopped": stopped,
+            }
     workers.close()
-    args.out_json.parent.mkdir(parents=True, exist_ok=True)
-    args.out_json.write_text(json.dumps(report, indent=2, sort_keys=True, default=str) + "\n")
-    args.out_md.write_text(render_markdown(report), encoding="utf-8")
-    print(render_markdown(report))
+    out_json.parent.mkdir(parents=True, exist_ok=True)
+    out_json.write_text(json.dumps(report, indent=2, sort_keys=True, default=str) + "\n")
+    markdown = render_dev_markdown(report) if dev else render_markdown(report)
+    out_md.write_text(markdown, encoding="utf-8")
+    print(markdown)
     return 1 if stopped else 0
+
+
+def _frozen(path: Path) -> list[str]:
+    """The frozen dev cases, or none when the dev split has not been run."""
+    if not path.is_file():
+        return []
+    return list(json.loads(path.read_text(encoding="utf-8"))["ev_ids"])
+
+
+def _row_order(row: Mapping[str, Any]) -> tuple[int, str, int]:
+    return (SYSTEMS.index(row["system"]), row["model"], row["cutoff"] is None)
+
+
+def _dev_reference_rows(
+    prior: FrequencyPrior,
+    knn: System | None,
+    neighbours: NeighbourCache,
+    cases: Sequence[str],
+    gold: Mapping[str, frozenset[str]],
+    history_gold: Mapping[str, frozenset[str]],
+    cutoffs: Mapping[str, date],
+) -> list[dict[str, Any]]:
+    """The free systems on the dev cases, for reference: they were tuned on these events.
+
+    The frequency prior uses its pre-2023 list; the kNN vote uses the cached neighbour
+    lists (each searched before its case's date) and the tuned cut-off. No retrieval runs.
+    """
+    rows = []
+    results = [{"ev_id": ev, "labels": prior.tuning_labels} for ev in cases]
+    if isinstance(knn, KnnVote) and all(ev in neighbours.lists for ev in cases):
+        knn_results = [
+            {
+                "ev_id": ev,
+                "labels": knn_predict(neighbours.lists[ev], history_gold, knn.tau, 5),
+            }
+            for ev in cases
+        ]
+    else:
+        knn_results = []
+    for name, res in (("frequency_prior", results), ("knn_vote", knn_results)):
+        if not res:
+            continue
+        row = score_cases(res, gold, history_gold=history_gold, passages={}, cutoffs=cutoffs)
+        row.update(
+            system=name,
+            model="none",
+            cutoff=None,
+            scope="dev (tuned on these)",
+            n_expected=len(cases),
+            complete=True,
+        )
+        rows.append(row)
+    return rows
 
 
 def _anthropic(model: str, tracker: SpendTracker) -> Provider:

@@ -5,7 +5,7 @@ import re
 from collections.abc import Iterator
 from datetime import date
 from pathlib import Path
-from typing import Any
+from typing import Any, ClassVar
 
 import psycopg
 import pytest
@@ -29,10 +29,12 @@ from causetrace.evaluation.causal_systems import (
     Rag,
     RagVerify,
     RandomContext,
+    apply_cutoff,
     knn_neighbours,
     knn_predict,
     knn_scores,
     random_passages,
+    tune_confidence,
     tune_tau,
 )
 from causetrace.evaluation.citation_audit import (
@@ -47,7 +49,7 @@ from causetrace.ingest import ingest
 from causetrace.llm import LLMResponseError, ProviderUnavailableError, SpendTracker
 from causetrace.llm.fake import FakeProvider
 from causetrace.retrieval import Retriever
-from causetrace.split import HELD_OUT_FROM
+from causetrace.split import HELD_OUT_FROM, corpus_cutoff
 
 A, B, C, D = "01-01-01", "02-02-02", "03-03-03", "04-04-04"
 PASSAGE_ID = re.compile(r"^\[([^\]]+)\] ", re.M)
@@ -327,25 +329,34 @@ def test_agent_switch_only_skips_verify(indexed: Connection) -> None:
 # --- Runner: resume, stop, repeats, models, audit --------------------------------------
 
 
-def _main(tmp: Path, db_url: str, provider: Any, *extra: str) -> int:
+def _main(
+    tmp: Path,
+    db_url: str,
+    provider: Any,
+    *extra: str,
+    retriever_factory: Any = _retriever,
+) -> int:
+    out = "dev" if "dev" in extra else "r"
     return ce.main(
         [
             "--database-url",
             db_url,
             "--cases-path",
             str(tmp / "cases.json"),
+            "--dev-cases-path",
+            str(tmp / "dev_cases.json"),
             "--runs-dir",
             str(tmp / "runs"),
             "--out-json",
-            str(tmp / "r.json"),
+            str(tmp / f"{out}.json"),
             "--out-md",
-            str(tmp / "r.md"),
+            str(tmp / f"{out}.md"),
             "--audit",
             str(tmp / "audit.csv"),
             *extra,
         ],
         provider_factory=provider,
-        retriever_factory=_retriever,
+        retriever_factory=retriever_factory,
     )
 
 
@@ -372,6 +383,7 @@ class CountingFactory:
 
 def test_end_to_end_resume_and_report(indexed: Connection, db_url: str, tmp_path: Path) -> None:
     factory = CountingFactory(Responder())
+    assert _main(tmp_path, db_url, factory, "--split", "dev", "--cases", "3") == 0
     assert _main(tmp_path, db_url, factory, "--cases", "4", "--workers", "2") == 0
     cases = json.loads((tmp_path / "cases.json").read_text())
     assert len(cases["ev_ids"]) == 4 and cases["n_scored"] == 100
@@ -386,10 +398,11 @@ def test_end_to_end_resume_and_report(indexed: Connection, db_url: str, tmp_path
     assert rows[("rag_verify", "cases")]["verifier_support_rate"] == 1.0
     assert rows[("rag", "cases")]["citation_validity"] == 1.0
     assert report["taxonomy"]["codes"] > 0
-    assert report["total_cost_usd"] == pytest.approx(factory.calls * 0.001)
+    dev_cost = json.loads((tmp_path / "dev.json").read_text())["total_cost_usd"]
+    assert report["total_cost_usd"] + dev_cost == pytest.approx(factory.calls * 0.001)
     md = (tmp_path / "r.md").read_text()
-    assert "| rag_verify | claude-haiku-5-5 | 4 |" in md
-    # rag_verify answered every case, so the audit sample exists.
+    assert "| rag_verify | claude-haiku-5-5 | 0.05 | 4 |" in md
+    # rag_verify answered every case with a tuned cut-off, so the audit sample exists.
     audit = read_audit(tmp_path / "audit.csv")
     assert 0 < len(audit) <= 50 and all(r["grade"] == "" for r in audit)
 
@@ -543,3 +556,188 @@ def test_shared_models_use_one_lock(monkeypatch: pytest.MonkeyPatch) -> None:
     assert isinstance(reranker, ce.LockedReranker)
     assert embedder._lock is reranker._lock
     assert second._embedder is embedder and second._reranker is reranker
+
+
+# --- Dev split and confidence cut-offs --------------------------------------------------
+
+
+def test_apply_cutoff_and_tune_confidence_on_hand_made_confidences() -> None:
+    def res(ev: str, *found: tuple[str, float]) -> dict[str, Any]:
+        findings = [
+            {"label": lbl, "confidence": c, "citations": [f"{lbl}:p"], "rationale": "r"}
+            for lbl, c in found
+        ]
+        return {
+            "ev_id": ev,
+            "labels": [lbl for lbl, _ in found],
+            "abstained": not found,
+            "cites": True,
+            "findings": findings,
+            "citations": [{"label": lbl, "passage_id": f"{lbl}:p"} for lbl, _ in found],
+        }
+
+    gold = {"e1": frozenset({A}), "e2": frozenset({B}), "e3": frozenset({C})}
+    results = [
+        res("e1", (A, 0.9), (B, 0.4)),  # right label high, wrong one low
+        res("e2", (B, 0.6), (D, 0.3)),
+        res("e3", (C, 0.5), (A, 0.5), (D, 0.1)),  # a wrong label as confident as the right
+    ]
+    cut = apply_cutoff(results[0], 0.5)
+    assert cut["labels"] == [A] and cut["citations"] == [{"label": A, "passage_id": f"{A}:p"}]
+    assert cut["cutoff"] == 0.5 and [f["label"] for f in cut["findings"]] == [A]
+    assert apply_cutoff(results[0], 0.95)["abstained"] is True
+    assert apply_cutoff(results[0], None) == results[0]  # untuned: unchanged
+    assert apply_cutoff({"ev_id": "e", "labels": [], "abstained": True}, 0.5)["labels"] == []
+    assert apply_cutoff(results[2], 0.5)["labels"] == [C, A]  # confidence >= tau is kept
+
+    tau, scores = tune_confidence(results, gold)
+    # F1 = 2tp / (2tp + fp + fn). tau <= 0.1: tp 3, fp 4 -> 6/10; 0.15-0.3: fp 3 -> 6/9;
+    # 0.35-0.4: fp 2 -> 6/8; 0.45-0.5: fp 1 -> 6/7; 0.55-0.6: tp 2, fn 1 -> 4/5;
+    # 0.65-0.9: tp 1, fn 2 -> 2/4; 0.95: nothing left.
+    assert scores[0.05] == pytest.approx(6 / 10) and scores[0.3] == pytest.approx(6 / 9)
+    assert scores[0.45] == pytest.approx(6 / 7) and scores[0.5] == pytest.approx(6 / 7)
+    assert scores[0.55] == pytest.approx(4 / 5) and scores[0.9] == pytest.approx(2 / 4)
+    assert scores[0.95] == 0.0
+    assert tau == 0.45  # best F1, tied with 0.5: ties go to the lower cut-off
+
+
+class GoldResponder(Responder):
+    """closed_book: the case's gold label at 0.7 and two wrong labels at 0.3 and 0.2.
+
+    On any set of cases the best cut-off is then 0.35 (keep only the gold label).
+    """
+
+    def __init__(self, gold_by_date: dict[str, list[str]], codes: list[str]) -> None:
+        super().__init__()
+        self.gold_by_date = gold_by_date
+        self.codes = codes
+
+    def __call__(self, system: str, prompt: str, schema: dict[str, Any]) -> dict[str, Any]:
+        if not prompt.startswith("# Task: closed_book"):
+            return super().__call__(system, prompt, schema)
+        day = re.search(r"^Date: (\S+)$", prompt, re.M)
+        assert day is not None
+        right = self.gold_by_date[day.group(1)][0]
+        wrong = [c for c in self.codes if c not in self.gold_by_date[day.group(1)]][:2]
+        return {
+            "findings": [
+                {"label": right, "confidence": 0.7, "rationale": "r"},
+                {"label": wrong[0], "confidence": 0.3, "rationale": "r"},
+                {"label": wrong[1], "confidence": 0.2, "rationale": "r"},
+            ]
+        }
+
+
+class RecordingRetriever(Retriever):
+    """Records every search's cutoff and excluded event."""
+
+    log: ClassVar[list[tuple[str, Any, Any]]] = []
+
+    def search(self, query: str, top_k: int = 10, **kw: Any) -> Any:
+        RecordingRetriever.log.append(("search", kw["before_date"], kw.get("exclude_event_id")))
+        return super().search(query, top_k, **kw)
+
+    def search_events(self, query: str, top_k: int = 10, **kw: Any) -> Any:
+        RecordingRetriever.log.append(("events", kw["before_date"], kw.get("exclude_event_id")))
+        return super().search_events(query, top_k, **kw)
+
+
+def test_dev_split_is_history_only_and_respects_each_cutoff(
+    indexed: Connection, db_url: str, tmp_path: Path
+) -> None:
+    dates: dict[str, date] = dict(indexed.execute("SELECT ev_id, ev_date FROM events").fetchall())
+    tuning = ce.tuning_events(indexed, None, 42)
+    assert tuning and all(date(2023, 1, 1) <= dates[ev] < HELD_OUT_FROM for ev in tuning)
+
+    RecordingRetriever.log = []
+    factory = CountingFactory(Responder())
+    code = _main(
+        tmp_path,
+        db_url,
+        factory,
+        "--split",
+        "dev",
+        "--systems",
+        "knn_vote",
+        "random_context",
+        "rag",
+        "rag_verify",
+        retriever_factory=lambda c: RecordingRetriever(c, FakeEmbedder(), FakeReranker()),
+    )
+    assert code == 0
+    frozen = json.loads((tmp_path / "dev_cases.json").read_text())
+    dev = frozen["ev_ids"]
+    assert sorted(dev) == sorted(tuning)  # default: every 2023 tuning event
+    assert all(dates[ev] < HELD_OUT_FROM for ev in dev)  # never a held-out event
+
+    # Every search (kNN tuning and the agents) is for a 2023 event, before its own date.
+    assert RecordingRetriever.log
+    for _, before, exclude in RecordingRetriever.log:
+        assert exclude in tuning and before == corpus_cutoff(dates[exclude]) == dates[exclude]
+
+    # Every context passage is from an earlier event, never the case itself.
+    runs = ce.ResultCache(tmp_path / "runs" / "dev")
+    passage_event: dict[str, str] = dict(
+        indexed.execute("SELECT passage_id, event_id FROM passages").fetchall()
+    )
+    for system in ("random_context", "rag", "rag_verify"):
+        records = list(runs.load(system, "claude-haiku-5-5").values())
+        assert {r["ev_id"] for r in records} == set(dev)
+        for r in records:
+            for pid in r["context_passages"]:
+                ev = passage_event[pid]
+                assert ev != r["ev_id"] and dates[ev] < dates[r["ev_id"]]
+    # Dev results stay out of the held-out cache and the held-out report.
+    assert not list((tmp_path / "runs").glob("rag*.jsonl"))
+    assert not (tmp_path / "r.json").exists()
+    report = json.loads((tmp_path / "dev.json").read_text())
+    assert report["split"] == "dev" and report["cases"]["n"] == len(dev)
+    rows = {(r["system"], r["cutoff"] is None) for r in report["rows"]}
+    assert ("rag", True) in rows and ("rag", False) in rows
+    assert ("knn_vote", True) in rows and "closed_book" not in {s for s, _ in rows}
+
+
+def test_held_out_scoring_applies_the_dev_tuned_cutoff(
+    indexed: Connection, db_url: str, tmp_path: Path
+) -> None:
+    gold = get_all_gold_labels(indexed)
+    dates: dict[str, date] = dict(indexed.execute("SELECT ev_id, ev_date FROM events").fetchall())
+    by_date: dict[str, list[str]] = {}
+    for ev in sorted(gold):
+        by_date.setdefault(dates[ev].isoformat(), []).extend(sorted(gold[ev]))
+    codes = sorted(load_taxonomy(indexed))
+    factory = CountingFactory(GoldResponder(by_date, codes))
+    args = ("--systems", "closed_book", "--workers", "2")
+
+    # Held-out first: no dev results yet, so no cut-off and every finding counts.
+    assert _main(tmp_path, db_url, factory, "--cases", "4", *args) == 0
+    row = next(r for r in json.loads((tmp_path / "r.json").read_text())["rows"])
+    assert row["system"] == "closed_book" and row["cutoff"] is None
+    assert row["predicted"] == 3 * 4
+
+    assert _main(tmp_path, db_url, factory, "--split", "dev", "--cases", "4", *args) == 0
+    dev_report = json.loads((tmp_path / "dev.json").read_text())
+    tuned = dev_report["tuning"]["llm_cutoffs"]["closed_book__claude-haiku-5-5"]
+    assert tuned["tau"] == 0.35 and tuned["dev_cases"] == 4
+    assert tuned["dev_micro_f1"] > tuned["dev_micro_f1_raw"]
+    assert "| closed_book | claude-haiku-5-5 | 0.35 | 4 |" in (tmp_path / "dev.md").read_text()
+
+    # The held-out report re-scores the cached results with the tuned cut-off: no new calls.
+    calls = factory.calls
+    assert _main(tmp_path, db_url, factory, "--cases", "4", *args) == 0
+    assert factory.calls == calls
+    report = json.loads((tmp_path / "r.json").read_text())
+    row = next(r for r in report["rows"] if r["system"] == "closed_book")
+    assert row["cutoff"] == 0.35 and row["predicted"] == 4  # only the 0.7 findings remain
+    assert report["tuning"]["llm_cutoffs"]["closed_book__claude-haiku-5-5"]["tau"] == 0.35
+    records = ce.ResultCache(tmp_path / "runs").load("closed_book", "claude-haiku-5-5").values()
+    expected = score_cases(
+        [apply_cutoff(r, 0.35) for r in records],
+        gold,
+        history_gold={},
+        passages={},
+        cutoffs={r["ev_id"]: HELD_OUT_FROM for r in records},
+    )
+    assert row["micro_f1"] == pytest.approx(expected["micro_f1"])
+    md = (tmp_path / "r.md").read_text()
+    assert "closed_book__claude-haiku-5-5: cut-off 0.35" in md

@@ -46,6 +46,7 @@ cost usage, the prompt hashes and the full node trace. Limits are in `AgentLimit
 ## Causal comparison
 
 ```sh
+uv run --group ml python scripts/eval_causal.py --split dev --cases 100  # tune cut-offs on 2023
 uv run --group ml python scripts/eval_causal.py --cases 100   # paid; resumable; stops at MAX_USD
 uv run python scripts/grade_citations.py                      # grade the 50 sampled citations
 uv run --group ml python scripts/eval_causal.py --report-only  # rebuild the report

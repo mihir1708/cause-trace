@@ -86,6 +86,7 @@ class FrequencyPrior:
         }
         self.k = max(FREQ_K_GRID, key=lambda k: (scores[k], -k))
         self.tuning_f1 = scores
+        self.tuning_labels = [lbl for lbl, _ in _top(pre_tuning, self.k)]  # for 2023 events
         counts = Counter(lbl for ev, g in history_gold.items() if dates[ev] < cutoff for lbl in g)
         self.labels = [lbl for lbl, _ in _top(counts, self.k)]
 
@@ -128,6 +129,44 @@ def tune_tau(
     scores = {
         tau: micro_f1(
             [(set(knn_predict(n, gold, tau, limit)), gold[ev]) for ev, n in neighbour_lists.items()]
+        )
+        for tau in TAU_GRID
+    }
+    best = max(TAU_GRID, key=lambda t: (scores[t], -t))
+    return best, scores
+
+
+def apply_cutoff(result: Mapping[str, Any], tau: float | None) -> dict[str, Any]:
+    """An LLM result with only the findings whose confidence is at least ``tau``.
+
+    Labels and citations are rebuilt from the kept findings; a result left with no label is
+    an abstention. ``tau=None`` (no tuned cut-off) and results without findings (an error or
+    an abstention) are returned unchanged. The raw findings stay in the cache, so a new
+    cut-off re-scores cached results without LLM calls.
+    """
+    out = dict(result)
+    findings = result.get("findings")
+    if tau is None or not isinstance(findings, list):
+        return out
+    kept = [f for f in findings if isinstance(f, dict) and _conf(f) >= tau - 1e-12]
+    labels = _labels(kept)
+    out.update(findings=kept, labels=labels, abstained=bool(result.get("abstained")) or not labels)
+    if result.get("cites"):
+        out["citations"] = _citations(kept)
+    out["cutoff"] = tau
+    return out
+
+
+def tune_confidence(
+    results: Sequence[Mapping[str, Any]], gold: Mapping[str, frozenset[str]]
+) -> tuple[float, dict[float, float]]:
+    """The confidence cut-off with the best micro F1 on dev results (ties: lowest).
+
+    Same grid as the kNN vote cut-off.
+    """
+    scores = {
+        tau: micro_f1(
+            [(set(apply_cutoff(r, tau)["labels"] or []), gold[r["ev_id"]]) for r in results]
         )
         for tau in TAU_GRID
     }
@@ -206,14 +245,14 @@ CLOSED_BOOK_SCHEMA: dict[str, Any] = {
 }
 
 
+def _conf(f: Mapping[str, Any]) -> float:
+    c = f.get("confidence")
+    return float(c) if isinstance(c, int | float) else 0.0
+
+
 def _ranked_findings(findings: Any, limit: int) -> list[dict[str, Any]]:
     items = [f for f in findings if isinstance(f, dict)] if isinstance(findings, list) else []
-
-    def conf(f: dict[str, Any]) -> float:
-        c = f.get("confidence")
-        return float(c) if isinstance(c, int | float) else 0.0
-
-    return sorted(items, key=lambda f: -conf(f))[:limit]
+    return sorted(items, key=lambda f: -_conf(f))[:limit]
 
 
 def _labels(findings: Sequence[Mapping[str, Any]]) -> list[str]:
