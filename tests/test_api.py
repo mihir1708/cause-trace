@@ -113,6 +113,8 @@ def _client(db_url: str, responder: Any = None, **kw: Any) -> TestClient:
         provider_factory=kw.pop("provider_factory", lambda: ReliableProvider(fake)),
         retriever_factory=kw.pop("retriever_factory", _retriever()),
         tracing=False,
+        pool_size=kw.pop("pool_size", 10),
+        pool_wait_s=kw.pop("pool_wait_s", 3.0),
     )
     return TestClient(app)
 
@@ -135,6 +137,19 @@ def test_health_ok_and_database_down(indexed: Connection, db_url: str) -> None:
         assert r.json()["status"] == "unavailable"
         assert client.post("/v1/search", json={"query": "x", "before_date": "2020-01-01"})\
             .status_code == 503  # fmt: skip
+
+
+def test_exhausted_pool_is_server_busy_not_database_down(indexed: Connection, db_url: str) -> None:
+    with _client(db_url, pool_size=1, pool_wait_s=0.2) as client:
+        assert client.get("/health").status_code == 200  # the one connection exists
+        app: Any = client.app
+        with app.state.pool.connection():  # a running request holds every connection
+            r = client.post("/v1/search", json={"query": "x", "before_date": "2020-01-01"})
+        assert r.status_code == 503
+        assert r.json()["detail"].startswith("server busy")
+        assert r.headers["Retry-After"] == "1"
+        r = client.post("/v1/search", json={"query": "engine", "before_date": "2020-01-01"})
+        assert r.status_code == 200
 
 
 # --- /v1/search ---------------------------------------------------------------------

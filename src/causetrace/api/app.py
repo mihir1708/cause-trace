@@ -39,7 +39,7 @@ from causetrace.api.models import (
     SearchResponse,
 )
 from causetrace.api.runs import get_run, save_run
-from causetrace.config import database_url
+from causetrace.config import API_DB_POOL_SIZE, API_POOL_WAIT_S, database_url
 from causetrace.db import Connection
 from causetrace.embeddings import Embedder
 from causetrace.guardrails import GuardrailViolation, check_free_text, ground_findings
@@ -175,6 +175,8 @@ def create_app(
     provider_factory: ProviderFactory | None = None,
     retriever_factory: RetrieverFactory | None = None,
     tracing: bool = True,
+    pool_size: int = API_DB_POOL_SIZE,
+    pool_wait_s: float = API_POOL_WAIT_S,
 ) -> FastAPI:
     """The application; factories are injectable so tests use fakes (no network)."""
     if tracing:
@@ -182,9 +184,9 @@ def create_app(
     pool = ConnectionPool(
         db_url or database_url(),
         min_size=1,
-        max_size=10,
+        max_size=pool_size,
         open=False,
-        timeout=DB_TIMEOUT_S,
+        timeout=pool_wait_s,
         kwargs={"autocommit": True, "connect_timeout": int(DB_TIMEOUT_S)},
     )
     make_retriever = retriever_factory or default_retriever_factory()
@@ -206,12 +208,24 @@ def create_app(
 
     app = FastAPI(title="CauseTrace", version="0.1.0", lifespan=lifespan)
 
+    app.state.pool = pool
+
     @contextmanager
     def connection() -> Iterator[Connection]:
         try:
-            with pool.connection(timeout=DB_TIMEOUT_S) as conn:
+            with pool.connection(timeout=pool_wait_s) as conn:
                 yield conn
-        except (PoolTimeout, psycopg.OperationalError) as err:
+        except PoolTimeout as err:
+            stats = pool.get_stats()
+            if stats.get("pool_size", 0) > 0 and stats.get("pool_available", 0) == 0:
+                # Every connection is held by a running request: overload, not an outage.
+                raise HTTPException(
+                    503,
+                    f"server busy: no database connection free within {pool_wait_s:g} s",
+                    headers={"Retry-After": "1"},
+                ) from err
+            raise HTTPException(503, f"database unavailable: {type(err).__name__}") from err
+        except psycopg.OperationalError as err:
             raise HTTPException(503, f"database unavailable: {type(err).__name__}") from err
 
     @app.middleware("http")
