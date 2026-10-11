@@ -406,7 +406,7 @@ def render_markdown(report: Mapping[str, Any]) -> str:
     if audit and audit["graded"]:
         out.append(
             f"{audit['graded']} of {audit['sampled']} sampled citations graded "
-            "(grader: see the EVAL_PROTOCOL.md change log): "
+            "(proposed by Claude, reviewed and approved by Mihir Mukhi; see EVAL_PROTOCOL.md): "
             f"{_pct(audit['precision_strict'])} supports the label (grade 2), "
             f"{_pct(audit['precision_lenient'])} supports it at least partly (grade 1 or 2). "
             f"Verifier support rate for rag_verify: {_pct(audit['verifier_support_rate'])}."
