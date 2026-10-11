@@ -26,7 +26,7 @@ models:
 eval-retrieval:
 	uv run --group ml python scripts/eval_retrieval.py
 
-# CI regression gate: rrf_rerank on the held-out events of the database (CI: the fixture).
+# CI regression gate: rrf on the held-out events of the database (CI: the fixture).
 retrieval-gate:
 	uv run --group ml python scripts/eval_retrieval.py --gate artifacts/ci_baseline.json
 

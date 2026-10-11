@@ -65,7 +65,7 @@ make ingest DATA=data/fixtures  # load mdb-export CSVs, write artifacts/ingest_r
 make models                   # download retrieval models into the HF cache (network)
 make index                    # passages, lexical stats, embeddings (resumable)
 make eval-retrieval           # artifacts/retrieval_results.{json,md}
-make retrieval-gate           # CI gate: rrf_rerank vs artifacts/ci_baseline.json
+make retrieval-gate           # CI gate: rrf vs artifacts/ci_baseline.json
 make update-baseline          # deliberate baseline change (run on the fixture)
 make check                    # ruff, mypy, pytest
 make down

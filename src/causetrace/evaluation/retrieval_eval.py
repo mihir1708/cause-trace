@@ -32,7 +32,7 @@ DEFAULT_JSON = Path("artifacts/retrieval_results.json")
 DEFAULT_MD = Path("artifacts/retrieval_results.md")
 DEFAULT_BASELINE = Path("artifacts/ci_baseline.json")
 DEFAULT_TOLERANCE = 0.02
-GATE_MODE: Mode = "rrf_rerank"
+GATE_MODE: Mode = "rrf"
 MANIFEST = Path("data_manifest.json")
 
 _SCORED_HELD_OUT_SQL = """
@@ -300,7 +300,13 @@ def baseline_record(
 def check_gate(
     current: dict[str, Any], baseline: dict[str, Any], tolerance: float = DEFAULT_TOLERANCE
 ) -> tuple[bool, str]:
-    """Fail when Label Recall@10 drops by more than ``tolerance`` or the query set differs."""
+    """Fail when Label Recall@10 drops by more than ``tolerance``, or the query set or mode
+    differs from the baseline."""
+    if baseline.get("mode", GATE_MODE) != GATE_MODE:
+        return False, (
+            f"baseline mode {baseline['mode']} differs from the gate mode {GATE_MODE}; "
+            "run `make update-baseline` deliberately and commit the result"
+        )
     if current["query_set_sha256"] != baseline["query_set_sha256"]:
         return False, (
             "query set differs from the baseline (fixture or eligibility changed); "
@@ -329,7 +335,9 @@ def main(
     parser.add_argument("--questions", type=Path, default=DEFAULT_QUESTIONS)
     parser.add_argument("--out-json", type=Path, default=DEFAULT_JSON)
     parser.add_argument("--out-md", type=Path, default=DEFAULT_MD)
-    parser.add_argument("--gate", type=Path, default=None, help="compare rrf_rerank with baseline")
+    parser.add_argument(
+        "--gate", type=Path, default=None, help=f"compare {GATE_MODE} with baseline"
+    )
     parser.add_argument("--write-baseline", type=Path, default=None)
     parser.add_argument("--tolerance", type=float, default=DEFAULT_TOLERANCE)
     parser.add_argument("--database-url", default=None)
