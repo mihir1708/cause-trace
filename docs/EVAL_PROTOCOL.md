@@ -107,6 +107,35 @@ stated, retrieved history events.
 
 System hyperparameters (k, thresholds, prompts) are chosen on history events only.
 
+How the causal comparison runs (`scripts/eval_causal.py`):
+
+- **Cases:** the scored held-out events (gold labels and a non-empty `narr_accp`; 514 on
+  the full snapshot). `--cases N` samples N with a fixed seed; the list is frozen in
+  `evals/causal_cases.json`. The frequency prior and the kNN vote always run on every
+  scored event (they are free) and are also reported on the frozen cases.
+- **Tuning set:** 2023 history events with gold labels and a non-empty `narr_accp`. Each is
+  queried with its own history-only cutoff (`corpus_cutoff`, so its own date) and excludes
+  itself.
+- **Frequency prior:** the k labels found in the most history events; k in 1–5 maximizes
+  micro F1 on the tuning set using counts from events before 2023 (ties: smaller k); the
+  final list counts all history events.
+- **kNN vote:** the top 10 distinct events from `search_events` (`rrf`, packet text,
+  `corpus_cutoff`, target excluded). A label's score is the sum of 1/rank over the
+  neighbours that have it, divided by the sum of 1/rank; labels scoring at least the
+  cut-off are predicted (at most 5, highest first). The cut-off is chosen from 0.05–0.95
+  (step 0.05) by micro F1 on the tuning set (ties: lower cut-off).
+- **Closed-book LLM:** `prompts/closed_book.md` with the fixed system prompt and taxonomy;
+  up to 5 labels; effort medium.
+- **Random-context LLM:** the agent's analyze prompt with 10 history passages drawn by
+  `md5(passage_id || seed || ev_id)` order from passages before the case's cutoff, target
+  excluded; one call, no verify.
+- **RAG agent:** `causetrace.agent.Agent(verify=False)`: the merged agent with the verify
+  node skipped, so analyze's predictions are the answer. **RAG agent + verifier:** the full
+  agent.
+- LLM systems call `claude-haiku-5-5` through `AnthropicProvider` directly (no fallback);
+  `--model` adds rows for another model on the same cases; `--repeat R` reports the mean
+  and the range over R runs.
+
 ## Causal metrics
 
 A system outputs, per held-out event, a predicted label set `P` (possibly empty), optional
@@ -123,6 +152,27 @@ citations (pairs of predicted label and cited history `ev_id`), or an abstention
 
 Citation metrics are reported only for systems that cite (not applicable to the frequency
 prior and the closed-book LLM).
+
+How these are computed (`causetrace.evaluation.causal_metrics`):
+
+- A system that abstains or predicts nothing has `P = ∅` and counts as an abstention.
+  Macro values give an empty prediction precision 0. **F1 answered** is micro F1 over the
+  cases that were not abstentions. "Recovered X of Y" is `TP` of `Σ|G|`.
+- Citations are passage ids; each maps to its history event through `passages`. A citation
+  is valid when the passage was in the context given to the system for that case and its
+  event predates the case's cutoff. Citation support is over all citations (invalid ones
+  count as unsupported) and reads the cited event's gold labels through `causetrace.gold`,
+  for scoring only.
+- **Verifier support rate** (RAG agent + verifier): share of the (finding, citation) pairs
+  the verifier judged in its final round that it judged SUPPORTED.
+- Gold labels outside the taxonomy (codes never seen as causes before 2024) are misses for
+  every system; their number is reported.
+- **Human citation precision:** 50 citations sampled from RAG agent + verifier answers
+  (`evals/citation_audit.csv`, seed 42, drawn once the run has answered every case) are
+  graded 2 (supports), 1 (partly) or 0 (does not) with `scripts/grade_citations.py`; the
+  report gives the share graded 2 and the share graded 1 or 2, next to the verifier support
+  rate.
+- Per-case cost: mean tokens, LLM calls, wall-clock seconds and dollars.
 
 ## Change log
 
@@ -150,3 +200,8 @@ prior and the closed-book LLM).
   analysis passages with nothing distinctive, 21 generic one-line probable causes). Decisions
   were proposed by Claude and approved as a list by the project owner rather than made one
   at a time; the Review entry above now says so. No results existed yet.
+- 2026-10-11 — Spelled out how the causal comparison runs and how its metrics are computed
+  (case freezing, tuning set, frequency-prior k and kNN cut-off tuning, random-context
+  draw, empty predictions as abstentions, answered-only F1, citation validity and support
+  per passage, verifier support rate, human citation audit). No causal results existed yet;
+  no existing definition changed.

@@ -53,7 +53,7 @@ retrieval over earlier investigations. Leakage control is the core requirement. 
   (default `postgresql://causetrace:causetrace@localhost:5432/causetrace_test`).
 - `scripts/` — `make_fixture.py`, `session_start.sh` (cloud SessionStart hook),
   `download_models.py`, `draft_questions.py` (paid LLM calls), `review_questions.py`,
-  `eval_retrieval.py`.
+  `eval_retrieval.py`, `eval_causal.py` (paid LLM calls), `grade_citations.py`.
 - `evals/` — drafted and reviewed known-item questions; `artifacts/` — generated results
   and `ci_baseline.json` (the CI retrieval gate; change it only with `make update-baseline`).
 - `docs/`, `data/fixtures/`, `data/raw/` (gitignored), `artifacts/`, `evals/`, `loadtests/`.
@@ -67,6 +67,7 @@ make ingest DATA=data/fixtures  # load mdb-export CSVs, write artifacts/ingest_r
 make models                   # download retrieval models into the HF cache (network)
 make index                    # passages, lexical stats, embeddings (resumable)
 make eval-retrieval           # artifacts/retrieval_results.{json,md}
+make eval-causal              # six systems; artifacts/causal_results.{json,md} (paid, resumable)
 make retrieval-gate           # CI gate: rrf vs artifacts/ci_baseline.json
 make update-baseline          # deliberate baseline change (run on the fixture)
 uv run --group ml python -m causetrace.agent <ev_id>   # agent result JSON with trace

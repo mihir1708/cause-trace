@@ -3,7 +3,7 @@ DATA ?= data/raw
 -include .env
 export
 
-.PHONY: up down migrate ingest index models eval-retrieval retrieval-gate update-baseline check
+.PHONY: up down migrate ingest index models eval-retrieval eval-causal retrieval-gate update-baseline check
 
 up:
 	docker compose up -d --wait
@@ -25,6 +25,9 @@ models:
 
 eval-retrieval:
 	uv run --group ml python scripts/eval_retrieval.py
+
+eval-causal:
+	uv run --group ml python scripts/eval_causal.py
 
 # CI regression gate: rrf on the held-out events of the database (CI: the fixture).
 retrieval-gate:

@@ -14,8 +14,11 @@ log = logging.getLogger(__name__)
 # USD per million tokens: (input, output) for prompts up to the threshold, then above it.
 # Cache writes cost 1.25x input, cache reads 0.1x input.
 LONG_CONTEXT_THRESHOLD = 100_000
+# Source: Anthropic model pricing table (claude-api reference, cached 2026-10-06).
 PRICES: dict[str, tuple[tuple[float, float], tuple[float, float]]] = {
     "claude-haiku-5-5": ((0.10, 0.50), (0.50, 2.50)),
+    "claude-sonnet-5-5": ((2.00, 10.00), (2.00, 10.00)),
+    "claude-opus-5-5": ((4.00, 20.00), (4.00, 20.00)),
 }
 CACHE_WRITE_MULTIPLIER = 1.25
 CACHE_READ_MULTIPLIER = 0.10

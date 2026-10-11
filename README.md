@@ -42,3 +42,11 @@ uv run --group ml python -m causetrace.agent <ev_id>   # Claude (claude-haiku-5-
 Prints the predicted findings with cited history passages, the verification, token and
 cost usage, the prompt hashes and the full node trace. Limits are in `AgentLimits`
 (`src/causetrace/config.py`); spend is capped by `MAX_USD`.
+
+## Causal comparison
+
+```sh
+uv run --group ml python scripts/eval_causal.py --cases 100   # paid; resumable; stops at MAX_USD
+uv run python scripts/grade_citations.py                      # grade the 50 sampled citations
+uv run --group ml python scripts/eval_causal.py --report-only  # rebuild the report
+```
