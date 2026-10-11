@@ -1,8 +1,12 @@
-data/raw/
+data/raw/*
+!data/raw/.gitkeep
 data/interim/
 .env
 .venv/
 __pycache__/
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
 # stray copies of the NTSB download at repo root
 /avall.zip
 /avall.mdb
