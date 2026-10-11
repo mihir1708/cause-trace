@@ -405,7 +405,8 @@ def render_markdown(report: Mapping[str, Any]) -> str:
     out += ["", "## Citation audit (rag_verify)", ""]
     if audit and audit["graded"]:
         out.append(
-            f"{audit['graded']} of {audit['sampled']} sampled citations graded by a person: "
+            f"{audit['graded']} of {audit['sampled']} sampled citations graded "
+            "(grader: see the EVAL_PROTOCOL.md change log): "
             f"{_pct(audit['precision_strict'])} supports the label (grade 2), "
             f"{_pct(audit['precision_lenient'])} supports it at least partly (grade 1 or 2). "
             f"Verifier support rate for rag_verify: {_pct(audit['verifier_support_rate'])}."
