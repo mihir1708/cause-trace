@@ -31,3 +31,14 @@ uv run python scripts/draft_questions.py    # paid: needs ANTHROPIC_API_KEY in .
 uv run python scripts/review_questions.py   # keep / edit / drop each draft (resumable)
 make eval-retrieval                         # writes artifacts/retrieval_results.{json,md}
 ```
+
+## Agent
+
+```sh
+uv run --group ml python -m causetrace.agent <ev_id>   # Claude (claude-haiku-5-5) if ANTHROPIC_API_KEY
+                                                       # is set, else the local Ollama model
+```
+
+Prints the predicted findings with cited history passages, the verification, token and
+cost usage, the prompt hashes and the full node trace. Limits are in `AgentLimits`
+(`src/causetrace/config.py`); spend is capped by `MAX_USD`.

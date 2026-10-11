@@ -1,5 +1,7 @@
 """LLM provider layer: costs, spend tracking, the Anthropic adapter (with a stub client)."""
 
+import json
+import urllib.error
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -7,9 +9,18 @@ from typing import Any
 import pytest
 
 from causetrace.config import max_usd
-from causetrace.llm import BudgetExceededError, LLMResponseError, SpendTracker, cost_usd
+from causetrace.llm import (
+    BudgetExceededError,
+    FallbackProvider,
+    LLMResponseError,
+    ProviderUnavailableError,
+    SpendTracker,
+    cost_usd,
+)
 from causetrace.llm.anthropic_provider import AnthropicProvider
 from causetrace.llm.fake import FakeProvider
+from causetrace.llm.ollama_provider import OllamaProvider
+from causetrace.llm.openai_provider import OpenAIProvider
 from causetrace.llm.provider import shared_tracker
 
 SCHEMA = {
@@ -102,7 +113,8 @@ def test_anthropic_provider_request_and_usage() -> None:
     parsed, usage = provider.generate_json("system text", "the prompt", SCHEMA)
     assert parsed == {"question": "Why?"}
     assert messages.kwargs["model"] == "claude-haiku-5-5"
-    assert messages.kwargs["system"] == "system text"
+    assert messages.kwargs["system"] == [{"type": "text", "text": "system text"}]
+    assert "temperature" not in messages.kwargs and "top_p" not in messages.kwargs
     assert messages.kwargs["messages"] == [{"role": "user", "content": "the prompt"}]
     assert messages.kwargs["output_config"] == {
         "effort": "low",
@@ -136,3 +148,115 @@ def test_anthropic_provider_checks_budget_before_calling() -> None:
     with pytest.raises(BudgetExceededError):
         provider.generate_json("s", "p", SCHEMA)
     assert messages.kwargs == {}  # no request was sent
+
+
+def test_anthropic_provider_caches_system_blocks_and_sets_effort() -> None:
+    provider, messages = _provider(_response())
+    provider.generate_json(
+        ["fixed prompt", "taxonomy"], "p", SCHEMA, effort="medium", cache_system=True
+    )
+    assert messages.kwargs["system"] == [
+        {"type": "text", "text": "fixed prompt"},
+        {"type": "text", "text": "taxonomy", "cache_control": {"type": "ephemeral"}},
+    ]
+    assert messages.kwargs["output_config"]["effort"] == "medium"
+
+
+def test_missing_credentials_make_the_provider_unavailable() -> None:
+    class NoCredentials:
+        def create(self, **kwargs: Any) -> Any:
+            raise TypeError("Could not resolve authentication method.")
+
+    provider = AnthropicProvider(client=SimpleNamespace(messages=NoCredentials()),
+                                 tracker=SpendTracker(max_usd=10))  # fmt: skip
+    with pytest.raises(ProviderUnavailableError):
+        provider.generate_json("s", "p", SCHEMA)
+
+
+def test_fallback_provider_switches_once_on_unavailability() -> None:
+    class Down:
+        model = "down"
+        tracker = SpendTracker(max_usd=10)
+
+        def generate_json(self, *a: Any, **k: Any) -> Any:
+            raise ProviderUnavailableError("no connection")
+
+    backup = FakeProvider(lambda s, p, sc: {"question": "from fallback"})
+    provider = FallbackProvider(Down(), backup)
+    assert provider.generate_json("s", "p", SCHEMA)[0] == {"question": "from fallback"}
+    assert provider.fell_back and provider.model == "fake-model"
+    provider.generate_json("s", "p", SCHEMA, effort="low", cache_system=True)
+    assert backup.calls[-1]["effort"] == "low" and backup.calls[-1]["cache_system"] is True
+
+
+def test_fallback_provider_does_not_hide_budget_errors() -> None:
+    primary = FakeProvider(lambda s, p, sc: {}, tracker=SpendTracker(max_usd=0))
+    provider = FallbackProvider(primary, FakeProvider(lambda s, p, sc: {"question": "x"}))
+    with pytest.raises(BudgetExceededError):
+        provider.generate_json("s", "p", SCHEMA)
+
+
+def test_ollama_provider(monkeypatch: pytest.MonkeyPatch) -> None:
+    sent: dict[str, Any] = {}
+
+    class Response:
+        def __enter__(self) -> "Response":
+            return self
+
+        def __exit__(self, *a: Any) -> None:
+            return None
+
+        def read(self) -> bytes:
+            return json.dumps(
+                {"message": {"content": '{"question": "local?"}'}, "prompt_eval_count": 40,
+                 "eval_count": 7}
+            ).encode()  # fmt: skip
+
+    def fake_urlopen(request: Any, timeout: float) -> Response:
+        sent["url"] = request.full_url
+        sent["body"] = json.loads(request.data)
+        return Response()
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+    tracker = SpendTracker(max_usd=10)
+    provider = OllamaProvider("llama3.1:8b", tracker=tracker)
+    parsed, usage = provider.generate_json(["sys a", "sys b"], "prompt", SCHEMA, effort="medium")
+    assert parsed == {"question": "local?"}
+    assert sent["url"] == "http://localhost:11434/api/chat"
+    assert sent["body"]["format"] == SCHEMA and sent["body"]["stream"] is False
+    assert sent["body"]["messages"][0] == {"role": "system", "content": "sys a\n\nsys b"}
+    assert "options" not in sent["body"]  # no sampling parameters
+    assert (usage.input_tokens, usage.output_tokens, usage.cost_usd) == (40, 7, 0.0)
+    assert len(tracker.calls) == 1
+    with pytest.raises(BudgetExceededError):  # the spend guard runs even for free calls
+        OllamaProvider(tracker=SpendTracker(max_usd=0)).generate_json("s", "p", SCHEMA)
+
+
+def test_ollama_unreachable_is_unavailable(monkeypatch: pytest.MonkeyPatch) -> None:
+    def refuse(request: Any, timeout: float) -> Any:
+        raise urllib.error.URLError("connection refused")
+
+    monkeypatch.setattr("urllib.request.urlopen", refuse)
+    with pytest.raises(ProviderUnavailableError):
+        OllamaProvider(tracker=SpendTracker(max_usd=10)).generate_json("s", "p", SCHEMA)
+
+
+def test_openai_provider_request_and_cost() -> None:
+    captured: dict[str, Any] = {}
+
+    def create(**kwargs: Any) -> Any:
+        captured.update(kwargs)
+        return SimpleNamespace(
+            usage=SimpleNamespace(prompt_tokens=1_000, completion_tokens=100),
+            choices=[SimpleNamespace(finish_reason="stop",
+                                     message=SimpleNamespace(content='{"question": "o?"}'))],
+        )  # fmt: skip
+
+    client = SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=create)))
+    provider = OpenAIProvider("some-model", usd_per_mtok_input=1.0, usd_per_mtok_output=2.0,
+                              client=client, tracker=SpendTracker(max_usd=10))  # fmt: skip
+    parsed, usage = provider.generate_json("s", "p", SCHEMA)
+    assert parsed == {"question": "o?"}
+    assert captured["response_format"]["json_schema"]["schema"] == SCHEMA
+    assert "temperature" not in captured
+    assert usage.cost_usd == pytest.approx((1_000 * 1.0 + 100 * 2.0) / 1e6)

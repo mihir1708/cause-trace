@@ -3,7 +3,7 @@
 from collections.abc import Callable
 from typing import Any
 
-from causetrace.llm.provider import SpendTracker, Usage
+from causetrace.llm.provider import Effort, SpendTracker, SystemPrompt, Usage, system_text
 
 Responder = Callable[[str, str, dict[str, Any]], dict[str, Any]]
 
@@ -27,16 +27,25 @@ class FakeProvider:
         self.usd_per_call = usd_per_call
         self.model = model
         self.prompts: list[str] = []
+        self.calls: list[dict[str, Any]] = []  # effort and cache flags per call, for tests
 
     def generate_json(
-        self, system: str, prompt: str, schema: dict[str, Any]
+        self,
+        system: SystemPrompt,
+        prompt: str,
+        schema: dict[str, Any],
+        *,
+        effort: Effort | None = None,
+        cache_system: bool = False,
     ) -> tuple[dict[str, Any], Usage]:
         self.tracker.check()
         self.prompts.append(prompt)
-        parsed = self.responder(system, prompt, schema)
+        self.calls.append({"prompt": prompt, "effort": effort, "cache_system": cache_system})
+        text = system_text(system)
+        parsed = self.responder(text, prompt, schema)
         usage = Usage(
             model=self.model,
-            input_tokens=len(system.split()) + len(prompt.split()),
+            input_tokens=len(text.split()) + len(prompt.split()),
             output_tokens=sum(len(str(v).split()) for v in parsed.values()),
             cost_usd=self.usd_per_call,
             latency_s=0.0,

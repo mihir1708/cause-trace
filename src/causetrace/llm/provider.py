@@ -2,9 +2,10 @@
 
 import logging
 import threading
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from functools import lru_cache
-from typing import Any, Protocol
+from typing import Any, Literal, Protocol
 
 from causetrace.config import max_usd
 
@@ -20,12 +21,27 @@ CACHE_WRITE_MULTIPLIER = 1.25
 CACHE_READ_MULTIPLIER = 0.10
 
 
+Effort = Literal["low", "medium", "high", "xhigh", "max"]
+# A system prompt is one string or several blocks; with ``cache_system`` the provider marks
+# the end of the blocks as a cache breakpoint (providers without caching join them).
+SystemPrompt = str | Sequence[str]
+
+
+def system_text(system: SystemPrompt) -> str:
+    """The system prompt as one string (blocks joined by blank lines)."""
+    return system if isinstance(system, str) else "\n\n".join(system)
+
+
 class BudgetExceededError(RuntimeError):
     """Raised before a call once the tracker's spend has reached its limit."""
 
 
 class LLMResponseError(RuntimeError):
     """The model returned no usable JSON (refusal, truncation, invalid output)."""
+
+
+class ProviderUnavailableError(RuntimeError):
+    """The provider cannot be reached or used (no credentials, connection, overload)."""
 
 
 @dataclass(frozen=True)
@@ -107,10 +123,73 @@ def shared_tracker() -> SpendTracker:
 
 
 class Provider(Protocol):
-    """Returns JSON matching ``schema`` (a JSON Schema object) and the call's usage."""
+    """Returns JSON matching ``schema`` (a JSON Schema object) and the call's usage.
+
+    ``effort`` sets the provider's reasoning effort when it has one (None: its default).
+    ``cache_system`` asks the provider to cache the system blocks (ignored without caching).
+    Providers never send temperature or other sampling parameters.
+    """
 
     tracker: SpendTracker
+    model: str
 
     def generate_json(
-        self, system: str, prompt: str, schema: dict[str, Any]
+        self,
+        system: SystemPrompt,
+        prompt: str,
+        schema: dict[str, Any],
+        *,
+        effort: Effort | None = None,
+        cache_system: bool = False,
     ) -> tuple[dict[str, Any], Usage]: ...
+
+
+def parse_json_object(text: str | None) -> dict[str, Any]:
+    """Parse model output as a JSON object or raise ``LLMResponseError``."""
+    import json
+
+    if text is None:
+        raise LLMResponseError("response has no text")
+    try:
+        parsed = json.loads(text)
+    except json.JSONDecodeError as err:
+        raise LLMResponseError(f"invalid JSON from model: {err}") from err
+    if not isinstance(parsed, dict):
+        raise LLMResponseError("expected a JSON object")
+    return parsed
+
+
+class FallbackProvider:
+    """Uses ``primary``; when it is unavailable (``ProviderUnavailableError``) uses ``fallback``.
+
+    Budget errors and unusable output are not unavailability and propagate unchanged.
+    """
+
+    def __init__(self, primary: Provider, fallback: Provider) -> None:
+        self.primary = primary
+        self.fallback = fallback
+        self.tracker = primary.tracker
+        self.model = primary.model
+        self.fell_back = False
+
+    def generate_json(
+        self,
+        system: SystemPrompt,
+        prompt: str,
+        schema: dict[str, Any],
+        *,
+        effort: Effort | None = None,
+        cache_system: bool = False,
+    ) -> tuple[dict[str, Any], Usage]:
+        if not self.fell_back:
+            try:
+                return self.primary.generate_json(
+                    system, prompt, schema, effort=effort, cache_system=cache_system
+                )
+            except ProviderUnavailableError as err:
+                log.warning("primary LLM unavailable (%s); using %s", err, self.fallback.model)
+                self.fell_back = True
+                self.model = self.fallback.model
+        return self.fallback.generate_json(
+            system, prompt, schema, effort=effort, cache_system=cache_system
+        )

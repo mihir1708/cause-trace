@@ -43,7 +43,9 @@ retrieval over earlier investigations. Leakage control is the core requirement. 
 
 - `src/causetrace/` — package (`config`, `db`, `migrate`, `ingest`, `models`, `leakage`,
   `packets`, `gold`, `split`, `passages`, `embeddings`, `rerank`, `retrieval`, `index`;
-  `llm/` provider interface; `evaluation/` metrics and runners; SQL in `migrations/`).
+  `llm/` provider interface (Anthropic, Ollama fallback, OpenAI, fake); `agent/` the
+  LangGraph multi-hop agent; `evaluation/` metrics and runners; prompts in `prompts/*.md`;
+  SQL in `migrations/`).
 - Retrieval models (sentence-transformers, torch) are in the optional `ml` dependency
   group: `uv sync --group ml`. Tests use fakes (`tests/fakes.py`); the one `slow` test
   loads real models from the local Hugging Face cache only and skips when absent.
@@ -67,6 +69,7 @@ make index                    # passages, lexical stats, embeddings (resumable)
 make eval-retrieval           # artifacts/retrieval_results.{json,md}
 make retrieval-gate           # CI gate: rrf vs artifacts/ci_baseline.json
 make update-baseline          # deliberate baseline change (run on the fixture)
+uv run --group ml python -m causetrace.agent <ev_id>   # agent result JSON with trace
 make check                    # ruff, mypy, pytest
 make down
 ```

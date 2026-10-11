@@ -141,3 +141,18 @@ def test_packets_module_never_touches_gold() -> None:
     assert queries
     for query in queries:
         assert set(re.findall(r"narr_\w+", query)) <= {"narr_accp_safe"}, query
+
+
+def test_packet_narratives_have_headings_split(
+    loaded: tuple[Connection, dict[str, Any]], fixture_data: FixtureData
+) -> None:
+    """Packets use the same heading split as passages, so both tokenize alike."""
+    conn, _ = loaded
+    glued = re.compile(r"(HISTORY OF FLIGHT|INFORMATION)[A-Za-z0-9]")
+    raw_glued = 0
+    for ev_id in fixture_data.ev_ids:
+        for a in get_incident_packet(ev_id, conn).aircraft:
+            assert not (a.narr_accp and glued.search(a.narr_accp)), ev_id
+    for n in fixture_data.narratives:
+        raw_glued += bool(glued.search(n["narr_accp"]))
+    assert raw_glued > 0  # the raw export does glue headings, so the split matters
