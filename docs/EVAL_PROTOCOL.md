@@ -78,8 +78,13 @@ A second retrieval check uses questions written for single history passages.
   (`evals/questions_draft.jsonl`) were written by Claude in a Claude Code session, recorded
   as `usage.model = "claude-code-session"`. `scripts/draft_questions.py` can draft with the
   LLM (`causetrace.llm`, `claude-haiku-5-5`) instead.
-- **Review** (`scripts/review_questions.py`): every draft is kept, edited or dropped by a
-  person. Only kept and edited questions are scored.
+- **Review** (`evals/questions_reviewed.jsonl`): every draft is kept, edited or dropped.
+  Only kept and edited questions are scored. `scripts/review_questions.py` records decisions
+  made one at a time in the terminal. For the committed 220, Claude proposed the decisions
+  (drop questions that cannot identify one event; edit questions stating facts not in the
+  passage, after a check of every question against its passage) and the project owner
+  approved the list as a whole; each record carries `reviewer` and, for drops and edits,
+  `reason`.
 - **Search:** each question is searched with `before_date = 2024-01-01` (history corpus)
   and nothing excluded, since the source event is the answer.
 - **Recall@10:** share of questions whose source event is among the top 10 distinct events.
@@ -141,3 +146,7 @@ prior and the closed-book LLM).
   Claude Code session instead of by `claude-haiku-5-5`: in the pilot, Haiku's questions were
   either too general to identify one event or, with a stricter prompt, copied rare numbers
   and names from the passage. No results existed yet; no other definition changed.
+- 2026-10-11 — Review of the 220 drafts: 171 kept, 19 edited, 30 dropped (5 factual and 4
+  analysis passages with nothing distinctive, 21 generic one-line probable causes). Decisions
+  were proposed by Claude and approved as a list by the project owner rather than made one
+  at a time; the Review entry above now says so. No results existed yet.
