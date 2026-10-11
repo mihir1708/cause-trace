@@ -19,7 +19,17 @@ from causetrace.ingest import ingest
 from causetrace.migrate import apply_migrations
 
 FIXTURES = Path(__file__).resolve().parents[1] / "data" / "fixtures"
-TABLES = ("findings", "labels", "narratives", "aircraft", "events", "schema_migrations")
+TABLES = (
+    "embedding_cache",
+    "lexeme_stats",
+    "passages",
+    "findings",
+    "labels",
+    "narratives",
+    "aircraft",
+    "events",
+    "schema_migrations",
+)
 _LOCAL_HOSTS = {"localhost", "127.0.0.1", "::1"}
 
 csv.field_size_limit(sys.maxsize)

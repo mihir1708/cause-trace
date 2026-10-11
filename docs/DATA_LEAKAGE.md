@@ -78,6 +78,23 @@ Constraints:
   never retrieve itself or a sibling held-out event.
 - The query for a target event is built from its packet only.
 
+## Passages and search
+
+`passages` (built by `make index`) holds, per event, the factual narrative (raw
+`narr_accp`, chunked), the analysis (`narr_accf`) and the probable cause (`narr_cause`). It
+therefore contains GOLD_ONLY text of every event it covers. Rules:
+
+- `causetrace.retrieval.search` / `search_events` filter `event_date < before_date` and
+  `event_id <> exclude_event_id` in the SQL of every candidate query (dense and lexical),
+  so fusion and reranking only ever see allowed passages. Tests check every mode.
+- `before_date` is a required argument. For a held-out target, pass
+  `before_date = 2024-01-01` (history only, per `docs/EVAL_PROTOCOL.md`) and
+  `exclude_event_id = <target ev_id>`. Pass `None` only outside evaluation.
+- The query for a target event is built from its packet only (SAFE fields and
+  `narr_accp_safe`), never from its passages.
+- Lexical term weights (`lexeme_stats`) are document frequencies over historical-split
+  passages only, so held-out text never shapes how queries are weighted.
+
 ## Known limitations
 
 - **Report publication dates.** The exported tables have no final-report date, so a
@@ -92,3 +109,4 @@ Constraints:
 ## Change log
 
 - 2026-10-11 — Initial version.
+- 2026-10-11 — Added "Passages and search" for hybrid retrieval. No class changed.

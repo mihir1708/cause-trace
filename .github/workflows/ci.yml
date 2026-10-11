@@ -28,14 +28,29 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v6
-      - run: uv sync --frozen
+        with:
+          enable-cache: true
+      - run: uv sync --frozen --group ml
       - name: ruff
         run: |
           uv run ruff check .
           uv run ruff format --check .
       - name: mypy
-        run: uv run mypy
-      - name: pytest
-        run: uv run pytest
+        run: uv run --group ml mypy
+      - name: cache Hugging Face models
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/huggingface
+          key: hf-models-${{ hashFiles('src/causetrace/config.py') }}
+      # Outside pytest: tests never download. If this fails, the slow test skips.
+      - name: download retrieval models
+        id: models
+        continue-on-error: true
+        run: make models
+      - name: pytest (including the slow real-model test)
+        run: uv run --group ml pytest -rs
       - name: ingest fixtures
         run: make ingest DATA=data/fixtures
+      - name: index fixtures
+        if: steps.models.outcome == 'success'
+        run: make index
