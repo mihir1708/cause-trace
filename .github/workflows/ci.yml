@@ -1,0 +1,41 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: causetrace
+          POSTGRES_PASSWORD: causetrace
+          POSTGRES_DB: causetrace
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U causetrace -d causetrace"
+          --health-interval 2s
+          --health-timeout 5s
+          --health-retries 30
+    env:
+      DATABASE_URL: postgresql://causetrace:causetrace@localhost:5432/causetrace
+      TEST_DATABASE_URL: postgresql://causetrace:causetrace@localhost:5432/causetrace_test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - run: uv sync --frozen
+      - name: ruff
+        run: |
+          uv run ruff check .
+          uv run ruff format --check .
+      - name: mypy
+        run: uv run mypy
+      - name: pytest
+        run: uv run pytest
+      - name: ingest fixtures
+        run: make ingest DATA=data/fixtures

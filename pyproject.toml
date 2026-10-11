@@ -1,0 +1,44 @@
+[project]
+name = "causetrace"
+version = "0.1.0"
+description = "Predict NTSB causal findings for an aviation incident from its facts, using retrieval over earlier investigations."
+readme = "README.md"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "psycopg[binary]>=3.2",
+    "pydantic>=2.7",
+]
+
+[dependency-groups]
+dev = [
+    "mypy>=1.11",
+    "pytest>=8.3",
+    "ruff>=0.6",
+]
+
+[build-system]
+requires = ["uv_build>=0.8,<0.12"]
+build-backend = "uv_build"
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+# Pre-existing fixture builder, kept byte-for-byte as committed with the fixture.
+extend-exclude = ["scripts/make_fixture.py"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "SIM", "RUF"]
+
+[tool.mypy]
+python_version = "3.12"
+files = ["src", "tests"]
+plugins = ["pydantic.mypy"]
+warn_unused_configs = true
+
+[[tool.mypy.overrides]]
+module = "causetrace.*"
+strict = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"
