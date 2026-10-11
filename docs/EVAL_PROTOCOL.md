@@ -66,13 +66,25 @@ How the held-out retrieval evaluation runs (`scripts/eval_retrieval.py`):
 
 A second retrieval check uses questions written for single history passages.
 
-- **Sampling** (`scripts/draft_questions.py`): 220 passages from events before 2024-01-01,
+- **Sampling** (`sample_passages`): 220 eligible passages from events before 2024-01-01,
   split evenly across section types (factual, analysis, probable cause), proportionally to
-  event year within a section, seed 42.
-- **Drafting:** the LLM (`causetrace.llm`, `claude-haiku-5-5`) writes one question per
-  passage that an investigator might ask and that the passage answers, paraphrased.
-- **Review** (`scripts/review_questions.py`): every draft is kept, edited or dropped by a
-  person. Only kept and edited questions are scored.
+  event year within a section, seed 42. Eligible means at least 20 words, text not shared
+  with any other event (case and whitespace ignored), and none of the NTSB boilerplate
+  markers in `BOILERPLATE` (foreign-investigation and FBI-led notices, pointers to separate
+  reports), so every question has exactly one right event.
+- **Drafting:** one "Which accident…?" question per passage naming two or three details
+  that together single out the event, paraphrased, with no registration numbers, names,
+  dates, airport identifiers or exact place names. The committed drafts
+  (`evals/questions_draft.jsonl`) were written by Claude in a Claude Code session, recorded
+  as `usage.model = "claude-code-session"`. `scripts/draft_questions.py` can draft with the
+  LLM (`causetrace.llm`, `claude-haiku-5-5`) instead.
+- **Review** (`evals/questions_reviewed.jsonl`): every draft is kept, edited or dropped.
+  Only kept and edited questions are scored. `scripts/review_questions.py` records decisions
+  made one at a time in the terminal. For the committed 220, Claude proposed the decisions
+  (drop questions that cannot identify one event; edit questions stating facts not in the
+  passage, after a check of every question against its passage) and the project owner
+  approved the list as a whole; each record carries `reviewer` and, for drops and edits,
+  `reason`.
 - **Search:** each question is searched with `before_date = 2024-01-01` (history corpus)
   and nothing excluded, since the source event is the answer.
 - **Recall@10:** share of questions whose source event is among the top 10 distinct events.
@@ -128,3 +140,13 @@ prior and the closed-book LLM).
   corpus cutoff, distinct events, IDCG pool, percentile method) and the known-item
   question protocol. These spell out or add definitions before any retrieval results exist;
   no existing definition changed.
+- 2026-10-11 — Known-item sampling skips passages that cannot identify one event (under 20
+  words, text shared across events, NTSB boilerplate). A 24-passage pilot found about a third
+  of the earlier sample unusable for known-item search. The 220 drafts were written in a
+  Claude Code session instead of by `claude-haiku-5-5`: in the pilot, Haiku's questions were
+  either too general to identify one event or, with a stricter prompt, copied rare numbers
+  and names from the passage. No results existed yet; no other definition changed.
+- 2026-10-11 — Review of the 220 drafts: 171 kept, 19 edited, 30 dropped (5 factual and 4
+  analysis passages with nothing distinctive, 21 generic one-line probable causes). Decisions
+  were proposed by Claude and approved as a list by the project owner rather than made one
+  at a time; the Review entry above now says so. No results existed yet.
