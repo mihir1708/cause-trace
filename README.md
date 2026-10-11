@@ -1,1 +1,22 @@
 # cause-trace
+
+CauseTrace predicts NTSB causal findings for an aviation incident from its facts, using
+retrieval over earlier investigations. Leakage control is the core requirement: see
+[`docs/DATA_LEAKAGE.md`](docs/DATA_LEAKAGE.md) and
+[`docs/EVAL_PROTOCOL.md`](docs/EVAL_PROTOCOL.md). Contributor rules are in
+[`CLAUDE.md`](CLAUDE.md).
+
+## Quickstart
+
+Requires Python 3.12, [uv](https://docs.astral.sh/uv/) and Docker.
+
+```sh
+cp .env.example .env
+uv sync
+make up                          # PostgreSQL 16 + pgvector
+make ingest DATA=data/fixtures   # 300-event fixture; report in artifacts/ingest_report.json
+make check                       # ruff, mypy, pytest
+```
+
+For the full dataset, export the `events`, `aircraft`, `narratives` and `Findings` tables of
+`avall.mdb` with `mdb-export` into `data/raw/` and run `make ingest`.

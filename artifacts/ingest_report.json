@@ -1,0 +1,67 @@
+{
+  "database_counts": {
+    "aircraft": 303,
+    "events": 300,
+    "findings": 972,
+    "labels": 79,
+    "narratives": 303
+  },
+  "files": {
+    "Findings.csv": {
+      "sha256": "52adabb95bae4cf28187d927eaaf9e149efe293aa124dbe2ac4ff03c757d0396"
+    },
+    "aircraft.csv": {
+      "sha256": "fa194cb4f3d5c4ed5e08bef02be30ae9b07cf48c6cceced37ad4b9114d54c7c6"
+    },
+    "events.csv": {
+      "sha256": "be23cf3f202eaba04f2fc4de1c344827dcc09dd6323ba695153b91732341b119"
+    },
+    "narratives.csv": {
+      "sha256": "8f03d6a2637dfa9c5ee886d00a8757ff6b898dd7021bf45d3f80d89f0a4f3c09"
+    }
+  },
+  "labels": {
+    "taxonomy_size": 79
+  },
+  "narrative_sanitization": {
+    "narratives": 303,
+    "sentences_removed": 1243,
+    "sentences_total": 11495,
+    "withheld": 57
+  },
+  "source_dir": "data/fixtures",
+  "tables": {
+    "aircraft": {
+      "accepted": 303,
+      "duplicates": 0,
+      "rejected": 0,
+      "rejection_examples": [],
+      "rejection_reasons": {},
+      "rows_read": 303
+    },
+    "events": {
+      "accepted": 300,
+      "duplicates": 0,
+      "rejected": 0,
+      "rejection_examples": [],
+      "rejection_reasons": {},
+      "rows_read": 300
+    },
+    "findings": {
+      "accepted": 972,
+      "duplicates": 0,
+      "rejected": 0,
+      "rejection_examples": [],
+      "rejection_reasons": {},
+      "rows_read": 972
+    },
+    "narratives": {
+      "accepted": 303,
+      "duplicates": 0,
+      "rejected": 0,
+      "rejection_examples": [],
+      "rejection_reasons": {},
+      "rows_read": 303
+    }
+  }
+}
