@@ -6,17 +6,31 @@ readme = "README.md"
 requires-python = ">=3.12,<3.13"
 dependencies = [
     "anthropic>=0.70",
+    "fastapi>=0.143.0",
     "langgraph>=0.2",
     "openai>=1.40",
+    "opentelemetry-api>=1.45.1",
+    "opentelemetry-exporter-otlp-proto-http>=1.45.1",
+    "opentelemetry-sdk>=1.45.1",
+    "psycopg-pool>=3.3.3",
     "psycopg[binary]>=3.2",
     "pydantic>=2.7",
+    "typer>=0.27.3",
+    "uvicorn[standard]>=0.54.0",
 ]
+
+[project.scripts]
+causetrace = "causetrace.cli:main"
 
 [dependency-groups]
 dev = [
+    "httpx>=0.28.1",
     "mypy>=1.11",
     "pytest>=8.3",
     "ruff>=0.6",
+]
+load = [
+    "locust>=2.46.7",
 ]
 ml = [
     "sentence-transformers>=3.0",

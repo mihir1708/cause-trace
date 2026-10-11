@@ -7,7 +7,10 @@ from dataclasses import dataclass, field
 from functools import lru_cache
 from typing import Any, Literal, Protocol
 
+from opentelemetry.trace import Status, StatusCode
+
 from causetrace.config import max_usd
+from causetrace.telemetry import tracer
 
 log = logging.getLogger(__name__)
 
@@ -196,3 +199,58 @@ class FallbackProvider:
         return self.fallback.generate_json(
             system, prompt, schema, effort=effort, cache_system=cache_system
         )
+
+
+class ReliableProvider:
+    """Wraps a provider for serving: one span per call, one retry on unusable output.
+
+    An ``LLMResponseError`` (invalid JSON, refusal, truncation) is retried ``retries`` times,
+    then raised, so the agent's node treats it as no answer and the run abstains.
+    Unavailability and budget errors are never retried here (the SDK already retried the
+    request) and propagate, so the API can answer 503.
+    """
+
+    def __init__(self, inner: Provider, retries: int = 1) -> None:
+        self.inner = inner
+        self.retries = retries
+        self.tracker = inner.tracker
+        self.model = inner.model
+
+    def generate_json(
+        self,
+        system: SystemPrompt,
+        prompt: str,
+        schema: dict[str, Any],
+        *,
+        effort: Effort | None = None,
+        cache_system: bool = False,
+    ) -> tuple[dict[str, Any], Usage]:
+        error: LLMResponseError | None = None
+        for attempt in range(1, self.retries + 2):
+            with tracer.start_as_current_span("llm.call") as span:
+                span.set_attribute("llm.model", self.inner.model)
+                span.set_attribute("llm.attempt", attempt)
+                if effort is not None:
+                    span.set_attribute("llm.effort", effort)
+                try:
+                    parsed, usage = self.inner.generate_json(
+                        system, prompt, schema, effort=effort, cache_system=cache_system
+                    )
+                except LLMResponseError as err:
+                    error = err
+                    span.record_exception(err)
+                    span.set_status(Status(StatusCode.ERROR, "unusable output"))
+                    log.warning("LLM output unusable (attempt %d): %s", attempt, err)
+                    continue
+                except (ProviderUnavailableError, BudgetExceededError) as err:
+                    span.record_exception(err)
+                    span.set_status(Status(StatusCode.ERROR, type(err).__name__))
+                    raise
+                span.set_attribute("llm.input_tokens", usage.input_tokens)
+                span.set_attribute("llm.output_tokens", usage.output_tokens)
+                span.set_attribute("llm.cache_read_tokens", usage.cache_read_input_tokens)
+                span.set_attribute("llm.cost_usd", usage.cost_usd)
+                span.set_attribute("llm.latency_s", usage.latency_s)
+                return parsed, usage
+        assert error is not None
+        raise error

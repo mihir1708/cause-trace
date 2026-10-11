@@ -130,6 +130,19 @@ covers. Rules:
   the lexical term weights (all history passages). Both are label lists or corpus
   statistics, not text or labels tied to the case, and neither touches held-out events.
 
+## HTTP API (`causetrace.api`)
+
+- `POST /v1/analyze` with an `ev_id` builds model input with `get_incident_packet` only;
+  with a free-text `packet` the request's own fields are the input (checked by the input
+  guardrails). Both run the agent above, so retrieval is history-only with the target
+  excluded (an ad-hoc packet's cutoff is `corpus_cutoff` of its date).
+- Responses and stored runs (`analysis_runs`) hold the request, model predictions, cited
+  history passage ids, the verification and the trace; nothing is read from
+  `causetrace.gold`. A test checks the API package source for gold imports and GOLD_ONLY
+  names.
+- `POST /v1/search` returns history passages (capped at 2024-01-01 like every search),
+  which include analysis and probable-cause text of those earlier events.
+
 ## Known limitations
 
 - **Report publication dates.** The exported tables have no final-report date, so a
@@ -151,3 +164,4 @@ covers. Rules:
   passages (whitespace only, after the leakage gate). No class changed.
 - 2026-10-11 — Added the causal evaluation section. No class changed.
 - 2026-10-11 — Added the dev split to the causal evaluation section. No class changed.
+- 2026-10-11 — Added the HTTP API section. No class changed.

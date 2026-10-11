@@ -1,0 +1,49 @@
+{
+  "git_sha": "37532cc768cd52556942f054c0d025bb9c524d53",
+  "host": "http://localhost:8000",
+  "duration": "60s",
+  "run_at": "2026-10-11T23:31:18+00:00",
+  "endpoint": "POST /v1/search",
+  "levels": [
+    {
+      "users": 1,
+      "requests": 60,
+      "failures": 0,
+      "rps": 1.0234828238343185,
+      "p50_ms": 670.0,
+      "p95_ms": 1000.0,
+      "p99_ms": 1600.0,
+      "error_rate": 0.0
+    },
+    {
+      "users": 10,
+      "requests": 375,
+      "failures": 0,
+      "rps": 6.347902104125267,
+      "p50_ms": 1200.0,
+      "p95_ms": 1900.0,
+      "p99_ms": 2200.0,
+      "error_rate": 0.0
+    },
+    {
+      "users": 25,
+      "requests": 420,
+      "failures": 0,
+      "rps": 7.101055962244476,
+      "p50_ms": 3100.0,
+      "p95_ms": 3900.0,
+      "p99_ms": 4400.0,
+      "error_rate": 0.0
+    },
+    {
+      "users": 50,
+      "requests": 382,
+      "failures": 0,
+      "rps": 6.460354189249794,
+      "p50_ms": 7100.0,
+      "p95_ms": 8000.0,
+      "p99_ms": 9100.0,
+      "error_rate": 0.0
+    }
+  ]
+}

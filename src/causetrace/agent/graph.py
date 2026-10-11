@@ -10,6 +10,7 @@ terminates.
 
 import operator
 import time
+from collections.abc import Callable
 from dataclasses import asdict
 from datetime import date
 from typing import Annotated, Any, Literal, TypedDict
@@ -26,6 +27,7 @@ from causetrace.llm import Effort, LLMResponseError, Provider
 from causetrace.packets import IncidentPacket, get_incident_packet
 from causetrace.retrieval import Mode, Retriever, rrf_fuse
 from causetrace.split import corpus_cutoff
+from causetrace.telemetry import tracer
 
 NodeName = Literal["plan", "check_evidence", "analyze", "verify"]
 EFFORT: dict[NodeName, Effort] = {
@@ -277,14 +279,15 @@ class Agent:
                     for h in result.hits
                 ]
             )
-            searches.append(
-                {
-                    "query": query,
-                    "mode": mode,
-                    "hits": len(result.hits),
-                    "ms": round((time.perf_counter() - start) * 1000, 1),
-                }
-            )
+            search: dict[str, Any] = {
+                "query": query,
+                "mode": mode,
+                "hits": len(result.hits),
+                "ms": round((time.perf_counter() - start) * 1000, 1),
+            }
+            if result.fallback:
+                search["fallback"] = result.fallback
+            searches.append(search)
         by_id = {p["passage_id"]: p for ranked in ranked_lists for p in ranked}
         fused = rrf_fuse(
             [[p["passage_id"] for p in ranked] for ranked in ranked_lists],
@@ -514,15 +517,25 @@ class Agent:
             return "analyze"
         return "finalize"
 
+    @staticmethod
+    def _traced(name: str, node: Callable[[AgentState], dict[str, Any]]) -> Any:
+        """Run ``node`` in an ``agent.<name>`` span (no change to what it does)."""
+
+        def traced(state: AgentState) -> dict[str, Any]:
+            with tracer.start_as_current_span(f"agent.{name}"):
+                return node(state)
+
+        return traced
+
     def _build(self) -> Any:
         g = StateGraph(AgentState)
-        g.add_node("plan", self.plan)
-        g.add_node("retrieve", self.retrieve)
-        g.add_node("check_evidence", self.check_evidence)
-        g.add_node("analyze", self.analyze)
+        g.add_node("plan", self._traced("plan", self.plan))
+        g.add_node("retrieve", self._traced("retrieve", self.retrieve))
+        g.add_node("check_evidence", self._traced("check_evidence", self.check_evidence))
+        g.add_node("analyze", self._traced("analyze", self.analyze))
         if self.verify_enabled:
-            g.add_node("verify", self.verify)
-        g.add_node("finalize", self.finalize)
+            g.add_node("verify", self._traced("verify", self.verify))
+        g.add_node("finalize", self._traced("finalize", self.finalize))
         g.add_edge(START, "plan")
         g.add_edge("plan", "retrieve")
         g.add_conditional_edges(
@@ -541,7 +554,27 @@ class Agent:
 
     def run(self, ev_id: str) -> dict[str, Any]:
         """Run the agent for ``ev_id``; returns the result with its full trace."""
-        packet = get_incident_packet(ev_id, self.conn)
+        return self.run_packet(get_incident_packet(ev_id, self.conn))
+
+    def run_packet(self, packet: IncidentPacket) -> dict[str, Any]:
+        """Run the agent on a packet (from ``get_incident_packet`` or a free-text request).
+
+        Retrieval uses ``corpus_cutoff(packet.ev_date)`` and excludes ``packet.ev_id``.
+        """
+        with tracer.start_as_current_span("agent.workflow") as span:
+            result = self._run(packet)
+            span.set_attribute("workflow.ev_id", result["ev_id"])
+            span.set_attribute("workflow.hops", result["hops"])
+            span.set_attribute("workflow.revisions", result["revisions"])
+            span.set_attribute("workflow.abstained", bool(result["abstained"]))
+            span.set_attribute("workflow.findings", len(result["findings"]))
+            span.set_attribute("workflow.passages", len(result["passages"]))
+            span.set_attribute("workflow.llm_calls", result["usage"]["calls"])
+            span.set_attribute("workflow.tokens", result["usage"]["tokens"])
+        return result
+
+    def _run(self, packet: IncidentPacket) -> dict[str, Any]:
+        ev_id = packet.ev_id
         before = corpus_cutoff(packet.ev_date)
         initial: AgentState = {
             "ev_id": ev_id,

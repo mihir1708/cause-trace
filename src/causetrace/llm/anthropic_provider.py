@@ -6,7 +6,7 @@ from typing import Any
 import anthropic
 from anthropic.types import MessageParam, OutputConfigParam, TextBlockParam
 
-from causetrace.config import LLM_MODEL, anthropic_api_key
+from causetrace.config import LLM_MAX_RETRIES, LLM_MODEL, LLM_TIMEOUT_S, anthropic_api_key
 from causetrace.llm.provider import (
     Effort,
     LLMResponseError,
@@ -26,7 +26,10 @@ class AnthropicProvider:
     """``generate_json`` through ``client.messages.create`` with ``output_config.format``.
 
     ``client`` can be injected (tests pass a stub); by default it is built from
-    ANTHROPIC_API_KEY (environment or .env). With ``cache_system`` the last system block
+    ANTHROPIC_API_KEY (environment or .env) with a ``timeout`` of LLM_TIMEOUT_S seconds per
+    request (``CAUSETRACE_LLM_TIMEOUT_S``, default 120). A timeout, an overload (HTTP 529)
+    and other unavailability raise ``ProviderUnavailableError``, so a run stops cleanly and
+    can resume. With ``cache_system`` the last system block
     carries ``cache_control``, so the fixed system prompt and taxonomy are cached. No
     temperature or other sampling parameter is sent.
     """
@@ -39,13 +42,20 @@ class AnthropicProvider:
         tracker: SpendTracker | None = None,
         effort: Effort = "low",
         max_tokens: int = MAX_TOKENS,
+        timeout: float = LLM_TIMEOUT_S,
+        max_retries: int = LLM_MAX_RETRIES,
     ) -> None:
         self.model = model
         self.effort: Effort = effort
         self.max_tokens = max_tokens
         self.tracker = tracker or shared_tracker()
+        self.timeout = timeout
         self._client: Any = (
-            client if client is not None else anthropic.Anthropic(api_key=anthropic_api_key())
+            client
+            if client is not None
+            else anthropic.Anthropic(
+                api_key=anthropic_api_key(), timeout=timeout, max_retries=max_retries
+            )
         )
 
     def generate_json(
@@ -77,11 +87,14 @@ class AnthropicProvider:
                 output_config=output_config,
             )
         except (
+            anthropic.APITimeoutError,  # after the SDK's retries; a subclass of the next one
             anthropic.APIConnectionError,
             anthropic.AuthenticationError,
             anthropic.PermissionDeniedError,
             anthropic.RateLimitError,
             anthropic.InternalServerError,
+            anthropic.ServiceUnavailableError,  # 503
+            anthropic.OverloadedError,  # 529
             TypeError,  # the SDK raises TypeError when no credentials can be resolved
         ) as err:
             raise ProviderUnavailableError(f"{type(err).__name__}: {err}") from err
