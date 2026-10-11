@@ -233,6 +233,6 @@ How these are computed (`causetrace.evaluation.causal_metrics`):
   would show up as new results and needs its own dated note here).
 - 2026-10-11 — Citation audit (`evals/citation_audit.csv`, 50 rag_verify citations): the grades
   were proposed by Claude in a Claude Code session, which read each incident packet next to
-  the cited passage, and were approved as a list by the project owner rather than typed one at
-  a time. The audit therefore checks the verifier against a Claude-proposed, owner-approved
-  grading, not a fully independent human one. No other definition changed.
+  the cited passage, and were reviewed and approved as a list by Mihir Mukhi (project owner)
+  rather than typed one at a time. The audit therefore checks the verifier against a
+  Claude-proposed grading reviewed and approved by Mihir Mukhi, not a fully independent human one. No other definition changed.
