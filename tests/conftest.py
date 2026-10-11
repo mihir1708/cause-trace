@@ -20,6 +20,7 @@ from causetrace.migrate import apply_migrations
 
 FIXTURES = Path(__file__).resolve().parents[1] / "data" / "fixtures"
 TABLES = (
+    "analysis_runs",
     "embedding_cache",
     "lexeme_stats",
     "passages",

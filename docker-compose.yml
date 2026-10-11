@@ -15,5 +15,35 @@ services:
       timeout: 5s
       retries: 30
 
+  # The HTTP API: `docker compose up -d api` (after `make migrate ingest index` on the host).
+  api:
+    build: .
+    profiles: ["api"]
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql://causetrace:causetrace@db:5432/causetrace
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      MAX_USD: ${MAX_USD:-10}
+      CAUSETRACE_TRACING: ${CAUSETRACE_TRACING:-console}
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-http://jaeger:4318}
+    ports:
+      - "8000:8000"
+    volumes:
+      - hf-cache:/models
+
+  # Optional trace viewer: `docker compose --profile api --profile tracing up -d` with
+  # CAUSETRACE_TRACING=otlp, then open http://localhost:16686.
+  jaeger:
+    image: jaegertracing/all-in-one:1.62.0
+    profiles: ["tracing"]
+    environment:
+      COLLECTOR_OTLP_ENABLED: "true"
+    ports:
+      - "16686:16686"
+      - "4318:4318"
+
 volumes:
   pgdata:
+  hf-cache:

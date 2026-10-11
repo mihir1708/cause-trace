@@ -6,9 +6,11 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
+import anthropic
+import httpx2
 import pytest
 
-from causetrace.config import max_usd
+from causetrace.config import LLM_TIMEOUT_S, max_usd
 from causetrace.llm import (
     BudgetExceededError,
     FallbackProvider,
@@ -171,6 +173,52 @@ def test_missing_credentials_make_the_provider_unavailable() -> None:
                                  tracker=SpendTracker(max_usd=10))  # fmt: skip
     with pytest.raises(ProviderUnavailableError):
         provider.generate_json("s", "p", SCHEMA)
+
+
+class Raising:
+    """A fake client whose ``messages.create`` raises ``err``."""
+
+    def __init__(self, err: Exception) -> None:
+        self.err = err
+        self.calls = 0
+
+    def create(self, **kwargs: Any) -> Any:
+        self.calls += 1
+        raise self.err
+
+
+def _request() -> Any:
+    return httpx2.Request("POST", "https://api.anthropic.com/v1/messages")
+
+
+@pytest.mark.parametrize(
+    "err",
+    [
+        anthropic.APITimeoutError(request=_request()),
+        anthropic.OverloadedError(
+            "Overloaded",
+            response=httpx2.Response(529, request=_request()),
+            body={"type": "error", "error": {"type": "overloaded_error"}},
+        ),
+    ],
+    ids=["timeout", "overloaded-529"],
+)
+def test_timeout_and_overload_make_the_provider_unavailable(err: Exception) -> None:
+    client = Raising(err)
+    provider = AnthropicProvider(
+        client=SimpleNamespace(messages=client), tracker=SpendTracker(max_usd=10)
+    )
+    with pytest.raises(ProviderUnavailableError, match=type(err).__name__):
+        provider.generate_json("s", "p", SCHEMA)
+    assert client.calls == 1 and provider.tracker.calls == []  # nothing billed
+
+
+def test_default_client_has_a_request_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")  # builds the client; no request sent
+    provider = AnthropicProvider(tracker=SpendTracker(max_usd=10))
+    assert provider.timeout == LLM_TIMEOUT_S == 120
+    assert provider._client.timeout == 120 and provider._client.max_retries == 2
+    assert AnthropicProvider(tracker=SpendTracker(max_usd=10), timeout=5)._client.timeout == 5
 
 
 def test_fallback_provider_switches_once_on_unavailability() -> None:

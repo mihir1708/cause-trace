@@ -6,8 +6,14 @@ so no mode can return a passage from the target event or from on/after ``before_
 By default (``history_only=True``) ``before_date`` is also capped at HELD_OUT_FROM, so only
 history passages can be returned; only an explicit ``history_only=False`` lifts the cap.
 Passages contain GOLD_ONLY text of their own events (docs/DATA_LEAKAGE.md).
+
+With ``rerank_fallback=True`` (the API) a reranker failure (model missing, runtime error)
+degrades ``rrf_rerank`` to the RRF list and is reported in ``fallback``; by default it
+raises, so an evaluation never scores RRF as if it were reranked. Every stage runs in an
+OpenTelemetry span.
 """
 
+import logging
 import math
 import time
 from collections.abc import Sequence
@@ -15,12 +21,16 @@ from dataclasses import dataclass, field
 from datetime import date
 from typing import Any, Literal
 
+from opentelemetry.trace import Span, Status, StatusCode
 from psycopg import sql
 
 from causetrace.db import Connection, connect
 from causetrace.embeddings import Embedder, default_embedder, to_pgvector
 from causetrace.rerank import Reranker, default_reranker
 from causetrace.split import HELD_OUT_FROM, corpus_cutoff
+from causetrace.telemetry import tracer
+
+log = logging.getLogger(__name__)
 
 Mode = Literal["dense", "lexical", "rrf", "rrf_rerank"]
 MODES: tuple[Mode, ...] = ("dense", "lexical", "rrf", "rrf_rerank")
@@ -32,6 +42,11 @@ HNSW_EF_SEARCH = 200  # > CANDIDATES so filtered HNSW scans still fill the list
 # ts_rank_cd normalization: 1 (divide by 1 + log length) | 4 (mean harmonic extent distance).
 # Without length normalization, long passages win OR queries built from whole narratives.
 TS_RANK_NORMALIZATION = 1 | 4
+# Parallel workers for the keyword query. Nearly every passage matches an OR query built from
+# a narrative, so ts_rank_cd over ~100k passages dominates search time; more workers split
+# that scan. The ORDER BY is a total order (score, passage_id), so the ranking is identical.
+LEXICAL_PARALLEL_WORKERS = 4
+LEXICAL_MIN_PARALLEL_SCAN = "1MB"  # lets the planner use all of them on a ~150 MB table
 
 
 @dataclass(frozen=True)
@@ -48,6 +63,7 @@ class SearchHit:
 class SearchResult:
     hits: list[SearchHit]
     timings_ms: dict[str, float] = field(default_factory=dict)
+    fallback: str | None = None  # set when a stage failed and a simpler ranking was used
 
 
 @dataclass(frozen=True)
@@ -62,6 +78,7 @@ class EventHit:
 class EventSearchResult:
     events: list[EventHit]
     timings_ms: dict[str, float] = field(default_factory=dict)
+    fallback: str | None = None
 
 
 def rrf_fuse(
@@ -94,15 +111,24 @@ JOIN lexeme_stats s ON s.lexeme = u.lexeme
 """
 
 
-def salient_terms(conn: Connection, query: str, limit: int = MAX_QUERY_TERMS) -> list[str]:
-    """Up to ``limit`` query lexemes with the highest tf * idf over historical passages.
-
-    Lexemes that never occur in the corpus cannot match and are dropped.
-    """
+def history_passage_count(conn: Connection) -> int:
+    """Number of historical-split passages (the N of the idf), at least 1."""
     n_row = conn.execute(
         "SELECT count(*) FROM passages WHERE event_date < %s", (HELD_OUT_FROM,)
     ).fetchone()
-    n_docs = max(int(n_row[0]) if n_row else 0, 1)
+    return max(int(n_row[0]) if n_row else 0, 1)
+
+
+def salient_terms(
+    conn: Connection, query: str, limit: int = MAX_QUERY_TERMS, *, n_docs: int | None = None
+) -> list[str]:
+    """Up to ``limit`` query lexemes with the highest tf * idf over historical passages.
+
+    Lexemes that never occur in the corpus cannot match and are dropped. ``n_docs`` is the
+    history passage count when the caller has it (counted here otherwise).
+    """
+    if n_docs is None:
+        n_docs = history_passage_count(conn)
     rows = conn.execute(_QUERY_TERMS_SQL, {"query": query}).fetchall()
     weighted = [(tf * math.log(1 + n_docs / ndoc), lex) for lex, tf, ndoc in rows]
     weighted.sort(key=lambda w: (-w[0], w[1]))
@@ -175,18 +201,26 @@ def _ms(start: float) -> float:
 
 
 class Retriever:
-    """Runs searches against ``conn``; models are loaded on first use if not given."""
+    """Runs searches against ``conn``; models are loaded on first use if not given.
+
+    ``rerank_fallback``: on a reranker failure return the RRF ranking (and say so in
+    ``fallback``) instead of raising.
+    """
 
     def __init__(
         self,
         conn: Connection,
         embedder: Embedder | None = None,
         reranker: Reranker | None = None,
+        *,
+        rerank_fallback: bool = False,
     ) -> None:
         self.conn = conn
+        self.rerank_fallback = rerank_fallback
         self._embedder = embedder
         self._reranker = reranker
         self._iterative_scan: bool | None = None
+        self._n_docs: int | None = None  # history passage count, counted once per retriever
 
     @property
     def embedder(self) -> Embedder:
@@ -213,9 +247,22 @@ class Retriever:
     def dense(
         self, query: str, before: date | None, exclude: str | None, timings: dict[str, float]
     ) -> list[SearchHit]:
-        start = time.perf_counter()
-        vector = self.embedder.embed([query], is_query=True)[0]
-        timings["embed_ms"] = _ms(start)
+        with tracer.start_as_current_span("retrieval.embed") as span:
+            start = time.perf_counter()
+            vector = self.embedder.embed([query], is_query=True)[0]
+            timings["embed_ms"] = _ms(start)
+            span.set_attribute("retrieval.embed_ms", timings["embed_ms"])
+        with tracer.start_as_current_span("retrieval.dense") as span:
+            return self._dense(vector, before, exclude, timings, span)
+
+    def _dense(
+        self,
+        vector: list[float],
+        before: date | None,
+        exclude: str | None,
+        timings: dict[str, float],
+        span: Span,
+    ) -> list[SearchHit]:
         start = time.perf_counter()
         params = {
             "vec": to_pgvector(vector),
@@ -233,13 +280,26 @@ class Retriever:
         # relaxed_order may return near-ties slightly out of order; sort exactly.
         rows.sort(key=lambda r: (-float(r[8]), r[0]))
         timings["dense_ms"] = _ms(start)
+        span.set_attribute("retrieval.dense_ms", timings["dense_ms"])
+        span.set_attribute("retrieval.candidates", len(rows))
         return [_hit(r, float(r[8]), i) for i, r in enumerate(rows, start=1)]
 
     def lexical(
         self, query: str, before: date | None, exclude: str | None, timings: dict[str, float]
     ) -> list[SearchHit]:
+        with tracer.start_as_current_span("retrieval.lexical") as span:
+            hits = self._lexical(query, before, exclude, timings)
+            span.set_attribute("retrieval.lexical_ms", timings["lexical_ms"])
+            span.set_attribute("retrieval.candidates", len(hits))
+            return hits
+
+    def _lexical(
+        self, query: str, before: date | None, exclude: str | None, timings: dict[str, float]
+    ) -> list[SearchHit]:
         start = time.perf_counter()
-        tsq = build_or_tsquery(salient_terms(self.conn, query))
+        if self._n_docs is None:
+            self._n_docs = history_passage_count(self.conn)
+        tsq = build_or_tsquery(salient_terms(self.conn, query, n_docs=self._n_docs))
         rows = []
         if tsq is not None:
             params = {
@@ -249,7 +309,13 @@ class Retriever:
                 "exclude": exclude,
                 "limit": CANDIDATES,
             }
-            rows = self.conn.execute(_LEXICAL_SQL, params).fetchall()
+            with self.conn.transaction():
+                self.conn.execute(
+                    "SELECT set_config('max_parallel_workers_per_gather', %s, true),"
+                    " set_config('min_parallel_table_scan_size', %s, true)",
+                    (str(LEXICAL_PARALLEL_WORKERS), LEXICAL_MIN_PARALLEL_SCAN),
+                )
+                rows = self.conn.execute(_LEXICAL_SQL, params).fetchall()
         timings["lexical_ms"] = _ms(start)
         return [_hit(r, float(r[8]), i) for i, r in enumerate(rows, start=1)]
 
@@ -261,8 +327,13 @@ class Retriever:
         exclude_event_id: str | None,
         mode: Mode,
         timings: dict[str, float],
+        notes: list[str] | None = None,
     ) -> list[SearchHit]:
-        """The full ranked candidate list (up to CANDIDATES passages) for ``mode``."""
+        """The full ranked candidate list (up to CANDIDATES passages) for ``mode``.
+
+        With ``rerank_fallback`` a reranker failure returns the RRF list and appends the
+        reason to ``notes``.
+        """
         if mode not in MODES:
             raise ValueError(f"mode must be one of {MODES}, got {mode!r}")
         if not query.strip():
@@ -274,20 +345,39 @@ class Retriever:
 
         dense = self.dense(query, before_date, exclude_event_id, timings)
         lexical = self.lexical(query, before_date, exclude_event_id, timings)
-        start = time.perf_counter()
-        by_id = {h.passage_id: h for h in [*lexical, *dense]}
-        fused = rrf_fuse([[h.passage_id for h in dense], [h.passage_id for h in lexical]])
-        hits = [
-            _replace(by_id[pid], score=score, rank=i) for i, (pid, score) in enumerate(fused, 1)
-        ]
-        timings["fuse_ms"] = _ms(start)
+        with tracer.start_as_current_span("retrieval.fuse") as span:
+            start = time.perf_counter()
+            by_id = {h.passage_id: h for h in [*lexical, *dense]}
+            fused = rrf_fuse([[h.passage_id for h in dense], [h.passage_id for h in lexical]])
+            hits = [
+                _replace(by_id[pid], score=score, rank=i) for i, (pid, score) in enumerate(fused, 1)
+            ]
+            timings["fuse_ms"] = _ms(start)
+            span.set_attribute("retrieval.fuse_ms", timings["fuse_ms"])
         if mode == "rrf":
             return hits
 
-        start = time.perf_counter()
-        scores = self.reranker.score(query, [h.content for h in hits])
-        order = sorted(range(len(hits)), key=lambda i: (-scores[i], hits[i].rank))
-        timings["rerank_ms"] = _ms(start)
+        with tracer.start_as_current_span("retrieval.rerank") as span:
+            start = time.perf_counter()
+            try:
+                scores = self.reranker.score(query, [h.content for h in hits])
+                if len(scores) != len(hits):
+                    raise ValueError(f"reranker returned {len(scores)} scores for {len(hits)}")
+            except Exception as err:  # any reranker failure degrades to the RRF ranking
+                if not self.rerank_fallback:
+                    raise
+                timings["rerank_ms"] = _ms(start)
+                reason = f"rerank failed ({type(err).__name__}: {err}); returned the rrf ranking"
+                log.warning(reason)
+                span.record_exception(err)
+                span.set_status(Status(StatusCode.ERROR, reason))
+                span.set_attribute("retrieval.fallback", "rrf")
+                if notes is not None:
+                    notes.append(reason)
+                return hits
+            order = sorted(range(len(hits)), key=lambda i: (-scores[i], hits[i].rank))
+            timings["rerank_ms"] = _ms(start)
+            span.set_attribute("retrieval.rerank_ms", timings["rerank_ms"])
         return [_replace(hits[i], score=scores[i], rank=r) for r, i in enumerate(order, 1)]
 
     def search(
@@ -307,16 +397,22 @@ class Retriever:
         """
         _check_top_k(top_k)
         timings: dict[str, float] = {}
-        start = time.perf_counter()
-        hits = self.ranked(
-            query,
-            before_date=effective_before_date(before_date, history_only),
-            exclude_event_id=exclude_event_id,
-            mode=mode,
-            timings=timings,
+        notes: list[str] = []
+        with tracer.start_as_current_span("retrieval.search") as span:
+            start = time.perf_counter()
+            hits = self.ranked(
+                query,
+                before_date=effective_before_date(before_date, history_only),
+                exclude_event_id=exclude_event_id,
+                mode=mode,
+                timings=timings,
+                notes=notes,
+            )
+            timings["total_ms"] = _ms(start)
+            _annotate(span, mode, top_k, timings, notes)
+        return SearchResult(
+            hits=hits[:top_k], timings_ms=timings, fallback=notes[0] if notes else None
         )
-        timings["total_ms"] = _ms(start)
-        return SearchResult(hits=hits[:top_k], timings_ms=timings)
 
     def search_events(
         self,
@@ -334,23 +430,40 @@ class Retriever:
         """
         _check_top_k(top_k)
         timings: dict[str, float] = {}
-        start = time.perf_counter()
-        hits = self.ranked(
-            query,
-            before_date=effective_before_date(before_date, history_only),
-            exclude_event_id=exclude_event_id,
-            mode=mode,
-            timings=timings,
+        notes: list[str] = []
+        with tracer.start_as_current_span("retrieval.search_events") as span:
+            start = time.perf_counter()
+            hits = self.ranked(
+                query,
+                before_date=effective_before_date(before_date, history_only),
+                exclude_event_id=exclude_event_id,
+                mode=mode,
+                timings=timings,
+                notes=notes,
+            )
+            grouped: dict[str, list[SearchHit]] = {}
+            for h in hits:
+                grouped.setdefault(h.event_id, []).append(h)
+            events = [
+                EventHit(event_id=ev, score=hs[0].score, rank=r, hits=hs)
+                for r, (ev, hs) in enumerate(grouped.items(), start=1)
+            ]
+            timings["total_ms"] = _ms(start)
+            _annotate(span, mode, top_k, timings, notes)
+        return EventSearchResult(
+            events=events[:top_k], timings_ms=timings, fallback=notes[0] if notes else None
         )
-        grouped: dict[str, list[SearchHit]] = {}
-        for h in hits:
-            grouped.setdefault(h.event_id, []).append(h)
-        events = [
-            EventHit(event_id=ev, score=hs[0].score, rank=r, hits=hs)
-            for r, (ev, hs) in enumerate(grouped.items(), start=1)
-        ]
-        timings["total_ms"] = _ms(start)
-        return EventSearchResult(events=events[:top_k], timings_ms=timings)
+
+
+def _annotate(
+    span: Span, mode: Mode, top_k: int, timings: dict[str, float], notes: list[str]
+) -> None:
+    span.set_attribute("retrieval.mode", mode)
+    span.set_attribute("retrieval.top_k", top_k)
+    for key, ms in timings.items():
+        span.set_attribute(f"retrieval.{key}", ms)
+    if notes:
+        span.set_attribute("retrieval.fallback", "rrf")
 
 
 def effective_before_date(before_date: date | None, history_only: bool) -> date | None:

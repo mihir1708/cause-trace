@@ -33,6 +33,10 @@ RERANK_REVISION = (
 # LLM provider (causetrace.llm). The API key and budget come from the environment or .env.
 LLM_MODEL = os.environ.get("CAUSETRACE_LLM_MODEL") or "claude-haiku-5-5"
 DEFAULT_MAX_USD = 10.0
+# Seconds per Claude request (the SDK default of 600 s let one hung call stall a run), and
+# SDK retries per call (connection errors, 408/409/429/5xx); a timed-out request is retried.
+LLM_TIMEOUT_S = float(os.environ.get("CAUSETRACE_LLM_TIMEOUT_S") or 120)
+LLM_MAX_RETRIES = int(os.environ.get("CAUSETRACE_LLM_MAX_RETRIES") or 2)
 # Free local fallback (causetrace.llm.ollama_provider).
 OLLAMA_URL = os.environ.get("CAUSETRACE_OLLAMA_URL") or "http://localhost:11434"
 OLLAMA_MODEL = os.environ.get("CAUSETRACE_OLLAMA_MODEL") or "llama3.1:8b"

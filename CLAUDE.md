@@ -42,10 +42,11 @@ retrieval over earlier investigations. Leakage control is the core requirement. 
 ## Layout
 
 - `src/causetrace/` — package (`config`, `db`, `migrate`, `ingest`, `models`, `leakage`,
-  `packets`, `gold`, `split`, `passages`, `embeddings`, `rerank`, `retrieval`, `index`;
-  `llm/` provider interface (Anthropic, Ollama fallback, OpenAI, fake); `agent/` the
-  LangGraph multi-hop agent; `evaluation/` metrics and runners; prompts in `prompts/*.md`;
-  SQL in `migrations/`).
+  `packets`, `gold`, `split`, `passages`, `embeddings`, `rerank`, `retrieval`, `index`,
+  `guardrails`, `telemetry`, `cli`; `llm/` provider interface (Anthropic, Ollama fallback,
+  OpenAI, fake, and `ReliableProvider` for serving); `agent/` the LangGraph multi-hop agent;
+  `api/` the FastAPI service; `evaluation/` metrics, runners and report renderers; prompts
+  in `prompts/*.md`; SQL in `migrations/`).
 - Retrieval models (sentence-transformers, torch) are in the optional `ml` dependency
   group: `uv sync --group ml`. Tests use fakes (`tests/fakes.py`); the one `slow` test
   loads real models from the local Hugging Face cache only and skips when absent.
@@ -53,10 +54,14 @@ retrieval over earlier investigations. Leakage control is the core requirement. 
   (default `postgresql://causetrace:causetrace@localhost:5432/causetrace_test`).
 - `scripts/` — `make_fixture.py`, `session_start.sh` (cloud SessionStart hook),
   `download_models.py`, `draft_questions.py` (paid LLM calls), `review_questions.py`,
-  `eval_retrieval.py`, `eval_causal.py` (paid LLM calls), `grade_citations.py`.
+  `eval_retrieval.py`, `eval_causal.py` (paid LLM calls), `grade_citations.py`,
+  `render_readme.py` (README results tables from `artifacts/`).
+- `loadtests/` — `locustfile.py` and `run.py` for `make loadtest` (Locust in the `load` group).
 - `evals/` — drafted and reviewed known-item questions; `artifacts/` — generated results
   and `ci_baseline.json` (the CI retrieval gate; change it only with `make update-baseline`).
-- `docs/`, `data/fixtures/`, `data/raw/` (gitignored), `artifacts/`, `evals/`, `loadtests/`.
+- `docs/` (`DATA_LEAKAGE.md`, `EVAL_PROTOCOL.md`, `DECISIONS.md`), `data/fixtures/`,
+  `data/raw/` (gitignored), `artifacts/`, `evals/`; `Dockerfile` for the API.
+- README results tables are generated (`make readme`); a test fails when they are stale.
 
 ## Commands
 
@@ -69,9 +74,12 @@ make index                    # passages, lexical stats, embeddings (resumable)
 make eval-retrieval           # artifacts/retrieval_results.{json,md}
 make eval-causal-dev          # LLM systems on 2023 dev events; tunes confidence cut-offs (paid)
 make eval-causal              # six systems; artifacts/causal_results.{json,md} (paid, resumable)
+make serve                    # HTTP API on :8000 (make api: in Docker, compose profile "api")
+make loadtest                 # /v1/search at 1/10/25/50 users -> artifacts/load_results.*
+make readme                   # README results tables from artifacts/
 make retrieval-gate           # CI gate: rrf vs artifacts/ci_baseline.json
 make update-baseline          # deliberate baseline change (run on the fixture)
-uv run --group ml python -m causetrace.agent <ev_id>   # agent result JSON with trace
+uv run --group ml causetrace ask <ev_id>               # agent result JSON with trace
 make check                    # ruff, mypy, pytest
 make down
 ```

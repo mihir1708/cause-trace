@@ -11,6 +11,7 @@ from fakes import FakeEmbedder, FakeReranker
 
 from causetrace.db import Connection
 from causetrace.embeddings import embed_passages
+from causetrace.evaluation.retrieval_eval import packet_query_text
 from causetrace.index import build_index
 from causetrace.ingest import ingest
 from causetrace.packets import get_incident_packet
@@ -24,7 +25,7 @@ from causetrace.retrieval import (
     salient_terms,
     search,
 )
-from causetrace.split import HELD_OUT_FROM, load_split
+from causetrace.split import HELD_OUT_FROM, corpus_cutoff, load_split
 
 # --- RRF on hand-made lists -------------------------------------------------------
 
@@ -285,3 +286,60 @@ def test_history_only_caps_a_held_out_before_date(
     )
     assert any(h.metadata["event_date"] >= HELD_OUT_FROM for h in lifted.hits)
     assert all(h.metadata["event_date"] < ev_date for h in lifted.hits)
+
+
+# --- Keyword search speedup keeps the ranking ----------------------------------------
+
+# The keyword search as it was before the speedup (per-query passage count, the planner's
+# default parallelism). Kept verbatim so the ranking of the fast path can be compared to it.
+_REFERENCE_LEXICAL_SQL = """
+SELECT passage_id, ts_rank_cd(tsv, %(tsq)s::tsquery, %(norm)s) AS score
+FROM passages
+WHERE tsv @@ %(tsq)s::tsquery
+  AND event_date < coalesce(%(before)s::date, 'infinity'::date)
+  AND (%(exclude)s::text IS NULL OR event_id <> %(exclude)s::text)
+ORDER BY score DESC, passage_id
+LIMIT %(limit)s
+"""
+
+
+def _reference_lexical(conn: Connection, query: str, before: date, exclude: str) -> list[str]:
+    import math
+
+    n_row = conn.execute(
+        "SELECT count(*) FROM passages WHERE event_date < %s", (HELD_OUT_FROM,)
+    ).fetchone()
+    n_docs = max(int(n_row[0]) if n_row else 0, 1)
+    rows = conn.execute(
+        """SELECT u.lexeme, coalesce(array_length(u.positions, 1), 1), s.ndoc
+           FROM unnest(to_tsvector('english', %(query)s)) AS u
+           JOIN lexeme_stats s ON s.lexeme = u.lexeme""",
+        {"query": query},
+    ).fetchall()
+    weighted = sorted(
+        ((tf * math.log(1 + n_docs / ndoc), lex) for lex, tf, ndoc in rows),
+        key=lambda w: (-w[0], w[1]),
+    )
+    tsq = build_or_tsquery([lex for _, lex in weighted[:30]])
+    if tsq is None:
+        return []
+    params = {"tsq": tsq, "norm": 1 | 4, "before": before, "exclude": exclude, "limit": 50}
+    return [r[0] for r in conn.execute(_REFERENCE_LEXICAL_SQL, params).fetchall()]
+
+
+def test_lexical_top50_unchanged_for_every_held_out_packet(
+    indexed: tuple[Connection, FakeEmbedder],
+) -> None:
+    conn, embedder = indexed
+    retriever = Retriever(conn, embedder)
+    held_out = load_split(conn).held_out
+    assert len(held_out) == 100
+    compared = 0
+    for ev_id in held_out:
+        packet = get_incident_packet(ev_id, conn)
+        query, before = packet_query_text(packet), corpus_cutoff(packet.ev_date)
+        expected = _reference_lexical(conn, query, before, ev_id)
+        hits = retriever.lexical(query, before, ev_id, {})
+        assert [h.passage_id for h in hits] == expected, ev_id  # same ids, same order
+        compared += bool(expected)
+    assert compared >= 95  # nearly every packet has a non-empty top 50

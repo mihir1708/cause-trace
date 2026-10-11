@@ -236,3 +236,10 @@ How these are computed (`causetrace.evaluation.causal_metrics`):
   the cited passage, and were reviewed and approved as a list by Mihir Mukhi (project owner)
   rather than typed one at a time. The audit therefore checks the verifier against a
   Claude-proposed grading reviewed and approved by Mihir Mukhi, not a fully independent human one. No other definition changed.
+- 2026-10-11 — Serving changes, no definition changed and no evaluation re-run. The keyword
+  search query now runs with more parallel workers and counts history passages once per
+  retriever; a test checks that its top 50 (ids and order) is unchanged for every held-out
+  fixture packet. The latencies in `artifacts/retrieval_results.*` were measured before this
+  change. Claude requests now time out after 120 s (`CAUSETRACE_LLM_TIMEOUT_S`) and an
+  overload (HTTP 529) stops a run as unavailable instead of crashing it; neither changes a
+  completed result.
