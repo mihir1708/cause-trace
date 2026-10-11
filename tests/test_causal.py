@@ -529,3 +529,17 @@ def test_audit_sample_and_grading(tmp_path: Path) -> None:
         grade_loop(path, lambda ev: "", lambda pid: "", ask=lambda _: "2", show=lambda _: None)
         == 47
     )
+
+
+def test_shared_models_use_one_lock(monkeypatch: pytest.MonkeyPatch) -> None:
+    # The embedder and reranker share the accelerator; on Apple GPUs (MPS) two threads
+    # encoding work at once abort the process, so both wrappers must hold the same lock.
+    monkeypatch.setattr(ce, "default_embedder", FakeEmbedder)
+    monkeypatch.setattr(ce, "default_reranker", FakeReranker)
+    make = ce.default_retriever_factory()
+    first, second = make(None), make(None)  # type: ignore[arg-type]
+    embedder, reranker = first._embedder, first._reranker
+    assert isinstance(embedder, ce.LockedEmbedder)
+    assert isinstance(reranker, ce.LockedReranker)
+    assert embedder._lock is reranker._lock
+    assert second._embedder is embedder and second._reranker is reranker
