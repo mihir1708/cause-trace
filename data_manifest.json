@@ -1,0 +1,37 @@
+{
+  "source_url": "https://data.ntsb.gov/avdata/FileDirectory/DownloadFile?fileID=C%3A%5Cavdata%5Cavall.zip",
+  "downloaded_at": "2026-10-11T00:48:04Z",
+  "source_file_date": "2026-10-01T07:36:18-06:00",
+  "files": {
+    "avall.zip": {
+      "file_size_bytes": 96583215,
+      "sha256": "bc74fefb1b39e1b86700a4be82b8ff6014bb1f6d81008524de73f2ddbd38b052"
+    },
+    "avall.mdb": {
+      "file_size_bytes": 561229824,
+      "sha256": "c891b8a6fe55651294a0cb0fa328e5648833caf5ac62b1c21d6caf3ea5e99bb7"
+    }
+  },
+  "tables": [
+    "Country",
+    "ct_iaids",
+    "ct_seqevt",
+    "dt_events",
+    "dt_Flight_Crew",
+    "eADMSPUB_DataDictionary",
+    "engines",
+    "events",
+    "Events_Sequence",
+    "Flight_Crew",
+    "flight_time",
+    "injury",
+    "NTSB_Admin",
+    "Occurrences",
+    "seq_of_events",
+    "states",
+    "aircraft",
+    "dt_aircraft",
+    "Findings",
+    "narratives"
+  ]
+}
