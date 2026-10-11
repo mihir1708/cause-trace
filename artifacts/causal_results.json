@@ -13,7 +13,7 @@
     "sampled": 50,
     "verifier_support_rate": 0.4241860465116279
   },
-  "git_sha": "810adfded023c16994629b457cda5656a5353e0f",
+  "git_sha": "ea6726d2b5ea9bd4bdcf2308fe96d9693b0abad7",
   "retrieval": {
     "embedding": "BAAI/bge-small-en-v1.5@5c38ec7c405ec4b44b94cc5a9bb96e735b38267a",
     "k": 10,
