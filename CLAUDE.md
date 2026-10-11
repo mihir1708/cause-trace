@@ -67,6 +67,7 @@ make ingest DATA=data/fixtures  # load mdb-export CSVs, write artifacts/ingest_r
 make models                   # download retrieval models into the HF cache (network)
 make index                    # passages, lexical stats, embeddings (resumable)
 make eval-retrieval           # artifacts/retrieval_results.{json,md}
+make eval-causal-dev          # LLM systems on 2023 dev events; tunes confidence cut-offs (paid)
 make eval-causal              # six systems; artifacts/causal_results.{json,md} (paid, resumable)
 make retrieval-gate           # CI gate: rrf vs artifacts/ci_baseline.json
 make update-baseline          # deliberate baseline change (run on the fixture)
