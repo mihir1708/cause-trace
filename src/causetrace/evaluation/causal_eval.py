@@ -206,10 +206,10 @@ class NeighbourCache:
 class LockedEmbedder:
     """Serializes calls to a shared embedding model across worker threads."""
 
-    def __init__(self, inner: Embedder) -> None:
+    def __init__(self, inner: Embedder, lock: threading.Lock) -> None:
         self.inner = inner
         self.model_name, self.revision, self.dim = inner.model_name, inner.revision, inner.dim
-        self._lock = threading.Lock()
+        self._lock = lock
 
     def embed(self, texts: Sequence[str], *, is_query: bool = False) -> list[list[float]]:
         with self._lock:
@@ -217,9 +217,9 @@ class LockedEmbedder:
 
 
 class LockedReranker:
-    def __init__(self, inner: Reranker) -> None:
+    def __init__(self, inner: Reranker, lock: threading.Lock) -> None:
         self.inner = inner
-        self._lock = threading.Lock()
+        self._lock = lock
 
     def score(self, query: str, passages: Sequence[str]) -> list[float]:
         with self._lock:
@@ -262,13 +262,16 @@ def default_retriever_factory() -> RetrieverFactory:
     embedder: Embedder | None = None
     reranker: Reranker | None = None
     lock = threading.Lock()
+    # One lock for both models: they share the accelerator, and PyTorch's MPS (Apple GPU)
+    # backend aborts when two threads encode GPU work at the same time.
+    model_lock = threading.Lock()
 
     def make(conn: Connection) -> Retriever:
         nonlocal embedder, reranker
         with lock:
             if embedder is None:
-                embedder = LockedEmbedder(default_embedder())
-                reranker = LockedReranker(default_reranker())
+                embedder = LockedEmbedder(default_embedder(), model_lock)
+                reranker = LockedReranker(default_reranker(), model_lock)
         return Retriever(conn, embedder, reranker)
 
     return make
