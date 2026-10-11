@@ -157,7 +157,14 @@ Citation audit (rag_verify): 50 of 50 sampled citations graded (proposed by Clau
 ### Load test
 
 <!-- results:load -->
-Not run yet: `make loadtest` writes `artifacts/load_results.json`.
+From `artifacts/load_results.json` (git `37532cc768cd`): POST /v1/search, 60s per level.
+
+| Users | RPS | p50 ms | p95 ms | p99 ms | Error rate |
+|---|---|---|---|---|---|
+| 1 | 1.02 | 670 | 1000 | 1600 | 0.00% |
+| 10 | 6.35 | 1200 | 1900 | 2200 | 0.00% |
+| 25 | 7.10 | 3100 | 3900 | 4400 | 0.00% |
+| 50 | 6.46 | 7100 | 8000 | 9100 | 0.00% |
 <!-- /results:load -->
 
 ## Limitations
