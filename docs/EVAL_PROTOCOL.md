@@ -81,3 +81,12 @@ prior and the closed-book LLM).
 ## Change log
 
 - 2026-10-11 — Initial version.
+- 2026-10-11 — Narrative gate measured on the full snapshot (`artifacts/ingest_report_full.json`;
+  no definitions changed, no results existed yet). Among non-empty factual narratives, the gate
+  withholds 5,934 of 23,043 history narratives and 0 of 1,357 held-out narratives, and removes
+  88,913 of 780,984 history sentences and 2,316 of 46,760 held-out sentences. Many held-out
+  narratives have no `narr_accf` or `narr_cause` to check against, but all of them belong to
+  events with no `cm_inPc = 'T'` findings, which are never scored: all 514 scored held-out
+  events (with findings and a non-empty `narr_accp`) have gold narratives, so the gate checked
+  every scored packet. The gate applies only to target-event packets; history passages used for
+  retrieval keep their full narratives.
