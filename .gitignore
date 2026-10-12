@@ -10,3 +10,4 @@ __pycache__/
 # stray copies of the NTSB download at repo root
 /avall.zip
 /avall.mdb
+.DS_Store

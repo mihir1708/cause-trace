@@ -21,9 +21,6 @@ For the full dataset, download `avall.zip` from the NTSB (link and checksums in
 `data_manifest.json`), export the `events`, `aircraft`, `narratives` and `Findings` tables
 of `avall.mdb` with `mdb-export` into `data/raw/` and run `make ingest`.
 
-In Claude Code cloud sessions there is no Docker; `scripts/session_start.sh` installs and
-starts PostgreSQL 16 with pgvector via apt instead.
-
 ## API
 
 ```sh
@@ -67,6 +64,7 @@ make eval-causal                   # six systems on held-out events (paid, resum
 uv run python scripts/grade_citations.py          # grade the 50 sampled citations
 make loadtest                      # /v1/search at 1, 10, 25, 50 users (API must be running)
 make readme                        # regenerate the README results from artifacts/
+make readme-example                # official findings for the README example (full database)
 make retrieval-gate                # CI gate: rrf vs artifacts/ci_baseline.json
 make update-baseline               # deliberate baseline change (run on the fixture)
 ```
@@ -116,9 +114,10 @@ Also:
   `postgresql://causetrace:causetrace@localhost:5432/causetrace_test`). Retrieval models are
   faked (`tests/fakes.py`); the one `slow` test loads real models from the local Hugging
   Face cache and skips when they are absent.
-- `scripts/`: `make_fixture.py`, `session_start.sh`, `download_models.py`,
+- `scripts/`: `make_fixture.py`, `download_models.py`,
   `draft_questions.py` (paid), `review_questions.py`, `eval_retrieval.py`,
-  `eval_causal.py` (paid), `grade_citations.py`, `render_readme.py`.
+  `eval_causal.py` (paid), `grade_citations.py`, `render_readme.py`,
+  `export_readme_example.py`.
 - `loadtests/`: `locustfile.py` and `run.py` for `make loadtest` (Locust in the `load`
   dependency group).
 - `evals/`: known-item questions, frozen case lists and the citation audit.

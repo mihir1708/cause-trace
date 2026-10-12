@@ -121,11 +121,18 @@ def findings_block(
     return "\n".join(f"- {b}" for b in bullets) or "Results not generated yet."
 
 
-def example_block(causal: Mapping[str, Any] | None, root: Path) -> str:
-    """One real answer from the evaluation run, picked by a fixed rule (not for correctness)."""
-    path = root / "artifacts" / "runs" / "rag_verify__claude-haiku-5-5.jsonl"
+EXAMPLE_RUNS = Path("runs") / "rag_verify__claude-haiku-5-5.jsonl"
+# The NTSB's official findings for the example case, written by
+# scripts/export_readme_example.py (needs the database; GOLD_ONLY, for display only).
+EXAMPLE_OFFICIAL = Path("readme_example.json")
+
+
+def pick_example(causal: Mapping[str, Any] | None, root: Path) -> dict[str, Any] | None:
+    """The first held-out rag_verify answer, in ev_id order, with two or more findings after
+    the tuned cut-off. A fixed rule: the pick never depends on whether the answer is right."""
+    path = root / ARTIFACTS / EXAMPLE_RUNS
     if causal is None or not path.is_file():
-        return "Not generated yet."
+        return None
     cut = causal["tuning"]["llm_cutoffs"].get("rag_verify__claude-haiku-5-5", {}).get("tau")
     cases = set(json.loads((root / causal["cases"]["path"]).read_text())["ev_ids"])
     records = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line]
@@ -133,24 +140,53 @@ def example_block(causal: Mapping[str, Any] | None, root: Path) -> str:
         (apply_cutoff(r, cut) for r in records if r["ev_id"] in cases and r["repeat"] == 0),
         key=lambda r: r["ev_id"],
     )
-    pick = next((r for r in answers if len(r["findings"]) >= 2), None)
+    return next((r for r in answers if len(r["findings"]) >= 2), None)
+
+
+def example_block(causal: Mapping[str, Any] | None, root: Path) -> str:
+    """One real answer from the evaluation run, picked by a fixed rule (not for correctness),
+    shown next to the NTSB's official findings when they have been exported."""
+    if causal is None or not (root / ARTIFACTS / EXAMPLE_RUNS).is_file():
+        return "Not generated yet."
+    pick = pick_example(causal, root)
     if pick is None:
         return "No example available."
+    official = _load(root / ARTIFACTS / EXAMPLE_OFFICIAL)
+    if official is not None and official.get("ev_id") != pick["ev_id"]:
+        official = None  # exported for another case: stale, so not shown
+    gold = {o["label"] for o in official["official"]} if official else None
     out = [
         f"NTSB case `{pick['ev_id']}` (the first 2024+ case, in ID order, with two or more "
         "cited findings; not selected for being correct). Each suggested cause comes with the "
         "earlier investigation it relies on:",
         "",
-        "| Suggested cause | Confidence | Why (Claude's rationale) | Cited earlier report |",
-        "|---|---|---|---|",
     ]
+    header = "| Suggested cause | Confidence | Why (Claude's rationale) | Cited earlier report |"
+    rule = "|---|---|---|---|"
+    if gold is not None:
+        header += " Also an NTSB finding? |"
+        rule += "---|"
+    out += [header, rule]
     for f in pick["findings"]:
         cited = ", ".join(f"`{c.split(':')[0]}`" for c in f["citations"])
         rationale = str(f.get("rationale") or "").replace("|", "/")
-        out.append(
+        row = (
             f"| {str(f.get('short_name') or f['label']).split('-')[-1]} "
             f"| {_f(f.get('confidence'), 2)} | {rationale} | {cited} |"
         )
+        if gold is not None:
+            row += f" {'Yes' if f['label'] in gold else 'No'} |"
+        out.append(row)
+    if official is not None:
+        names = "; ".join(
+            str(o.get("description") or o["label"]).replace("|", "/") for o in official["official"]
+        )
+        hits = sum(f["label"] in gold for f in pick["findings"]) if gold else 0
+        out += [
+            "",
+            f"What the NTSB concluded for this case: {names or 'no cause findings'}. "
+            f"{hits} of {len(pick['findings'])} suggested causes match it.",
+        ]
     return "\n".join(out)
 
 
