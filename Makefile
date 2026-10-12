@@ -3,7 +3,7 @@ DATA ?= data/raw
 -include .env
 export
 
-.PHONY: up down migrate ingest index models eval-retrieval eval-causal eval-causal-dev retrieval-gate update-baseline serve api loadtest readme check
+.PHONY: up down migrate ingest index models eval-retrieval eval-causal eval-causal-dev retrieval-gate update-baseline serve api loadtest readme readme-example check
 
 up:
 	docker compose up -d --wait
@@ -49,6 +49,9 @@ loadtest:
 # Results tables in README.md, regenerated from artifacts/.
 readme:
 	uv run python scripts/render_readme.py
+
+readme-example:  # official findings for the README example (needs the full database)
+	uv run python scripts/export_readme_example.py
 
 # CI regression gate: rrf on the held-out events of the database (CI: the fixture).
 retrieval-gate:

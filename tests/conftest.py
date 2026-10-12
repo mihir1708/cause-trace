@@ -38,7 +38,7 @@ csv.field_size_limit(sys.maxsize)
 
 @pytest.fixture(autouse=True, scope="session")
 def _no_external_network() -> Iterator[None]:
-    """Fail any Python-level connection to a non-loopback host (CLAUDE.md rule 4)."""
+    """Fail any Python-level connection to a non-loopback host (DEVELOPMENT.md rule 4)."""
     real_connect = socket.socket.connect
 
     def guarded(self: socket.socket, address: Any) -> None:

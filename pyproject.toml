@@ -3,6 +3,8 @@ name = "causetrace"
 version = "0.1.0"
 description = "Predict NTSB causal findings for an aviation incident from its facts, using retrieval over earlier investigations."
 readme = "README.md"
+license = "MIT"
+authors = [{ name = "Mihir Mukhi" }]
 requires-python = ">=3.12,<3.13"
 dependencies = [
     "anthropic>=0.70",
