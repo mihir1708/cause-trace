@@ -57,10 +57,12 @@ flowchart LR
 <!-- results:example -->
 NTSB case `20240103193598` (the first 2024+ case, in ID order, with two or more cited findings; not selected for being correct). Each suggested cause comes with the earlier investigation it relies on:
 
-| Suggested cause | Confidence | Why (Claude's rationale) | Cited earlier report |
-|---|---|---|---|
-| Engine fuel and control | 0.50 | The airplane was idle for 26 months and the pilot could not verify fuel quality (possibly 2+ years old), and the loss of power is consistent with fuel-related causes such as stale fuel or fuel exhaustion in prior accidents. | `20200803X35353` |
-| Ignition system | 0.40 | The right magneto would not produce spark when hand-rotated and was disassembled without findings, so an ignition system malfunction is a plausible cause of the power loss, as in prior magneto-related power losses. | `20201013102138` |
+| Suggested cause | Confidence | Why (Claude's rationale) | Cited earlier report | Also an NTSB finding? |
+|---|---|---|---|---|
+| Engine fuel and control | 0.50 | The airplane was idle for 26 months and the pilot could not verify fuel quality (possibly 2+ years old), and the loss of power is consistent with fuel-related causes such as stale fuel or fuel exhaustion in prior accidents. | `20200803X35353` | No |
+| Ignition system | 0.40 | The right magneto would not produce spark when hand-rotated and was disassembled without findings, so an ignition system malfunction is a plausible cause of the power loss, as in prior magneto-related power losses. | `20201013102138` | No |
+
+What the NTSB concluded for this case: Not determined-Not determined-(general)-(general)-Unknown/Not determined. 0 of 2 suggested causes match it.
 <!-- /results:example -->
 
 ## Results

@@ -1,0 +1,10 @@
+{
+  "ev_id": "20240103193598",
+  "official": [
+    {
+      "label": "05-00-00",
+      "description": "Not determined-Not determined-(general)-(general)-Unknown/Not determined"
+    }
+  ],
+  "source": "findings with cm_inPc = 'T' (scripts/export_readme_example.py)"
+}
