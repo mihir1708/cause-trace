@@ -87,9 +87,13 @@ def test_example_shows_official_findings_only_for_the_picked_case(tmp_path: Path
     text = example_block(causal, tmp_path)
     assert "Also an NTSB finding?" in text and "| Yes |" in text and "| No |" in text
     assert "NTSB concluded for this case: Not determined. 1 of 2 suggested causes" in text
-    # A case whose only official finding is "not determined" is skipped by the export, and the
-    # README follows the recorded skip list, so it never renders that case as the example.
+    # When the export chose the example as a full match, the README says so and gives the counts.
     (art / "readme_example.json").write_text(
-        json.dumps({"ev_id": "e9", "skipped_undetermined": ["e2"], "official": []})
-    )
-    assert example_block(causal, tmp_path) == "No example available."
+        json.dumps({"ev_id": "e2", "official": [{"label": "01", "description": "A"},
+                                                {"label": "02", "description": "B"}],
+                    "n_candidates": 7, "n_all_confirmed": 2, "n_exact": 1})
+    )  # fmt: skip
+    text = example_block(causal, tmp_path)
+    assert "chosen to show a case the system got right" in text
+    assert "of the 7 test answers with two or more suggested causes, 2 had every" in text
+    assert "2 of 2 suggested causes match it" in text

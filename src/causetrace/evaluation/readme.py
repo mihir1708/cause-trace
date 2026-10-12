@@ -144,12 +144,14 @@ def example_candidates(causal: Mapping[str, Any] | None, root: Path) -> list[dic
 
 
 def pick_example(
-    causal: Mapping[str, Any] | None, root: Path, skip: frozenset[str] = frozenset()
+    causal: Mapping[str, Any] | None, root: Path, ev_id: str | None = None
 ) -> dict[str, Any] | None:
-    """The first candidate not in ``skip``. A fixed rule: the pick never depends on whether the
-    answer is right. ``skip`` holds cases whose only NTSB finding is "not determined" (written
-    by scripts/export_readme_example.py), which leave nothing to compare the answer with."""
-    return next((r for r in example_candidates(causal, root) if r["ev_id"] not in skip), None)
+    """The candidate for ``ev_id`` (chosen by scripts/export_readme_example.py), else the first
+    candidate in ev_id order."""
+    candidates = example_candidates(causal, root)
+    if ev_id is not None:
+        return next((r for r in candidates if r["ev_id"] == ev_id), None)
+    return candidates[0] if candidates else None
 
 
 def example_block(causal: Mapping[str, Any] | None, root: Path) -> str:
@@ -158,20 +160,27 @@ def example_block(causal: Mapping[str, Any] | None, root: Path) -> str:
     if causal is None or not (root / ARTIFACTS / EXAMPLE_RUNS).is_file():
         return "Not generated yet."
     official = _load(root / ARTIFACTS / EXAMPLE_OFFICIAL)
-    skip = frozenset(official.get("skipped_undetermined", [])) if official else frozenset()
-    pick = pick_example(causal, root, skip)
+    pick = pick_example(causal, root, official["ev_id"] if official else None)
     if pick is None:
         return "No example available."
-    if official is not None and official.get("ev_id") != pick["ev_id"]:
-        official = None  # exported for another case: stale, so not shown
     gold = {o["label"] for o in official["official"]} if official else None
-    out = [
-        f"NTSB case `{pick['ev_id']}` (the first 2024+ case, in ID order, with two or more "
-        "cited findings and a cause the NTSB determined; not selected for being correct). "
-        "Each suggested cause comes with the "
-        "earlier investigation it relies on:",
-        "",
-    ]
+    if official is not None and "n_exact" in official:
+        intro = (
+            f"NTSB case `{pick['ev_id']}`, chosen to show a case the system got right: the first "
+            f"2024+ case, in ID order, whose suggested causes exactly match the NTSB's findings "
+            f"(three or more). Such full matches are not typical: of the "
+            f"{official['n_candidates']} test answers with two or more suggested causes, "
+            f"{official['n_all_confirmed']} had every suggestion confirmed by the NTSB; overall "
+            "accuracy is in the results table below. Each suggested cause comes with the "
+            "earlier investigation it relies on:"
+        )
+    else:
+        intro = (
+            f"NTSB case `{pick['ev_id']}` (the first 2024+ case, in ID order, with two or more "
+            "cited findings). Each suggested cause comes with the earlier investigation it "
+            "relies on:"
+        )
+    out = [intro, ""]
     header = "| Suggested cause | Confidence | Why (Claude's rationale) | Cited earlier report |"
     rule = "|---|---|---|---|"
     if gold is not None:

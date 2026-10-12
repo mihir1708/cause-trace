@@ -1,13 +1,21 @@
 {
-  "ev_id": "20240108193628",
-  "skipped_undetermined": [
-    "20240103193598"
-  ],
+  "ev_id": "20240415194091",
   "official": [
     {
-      "label": "02-04-15",
-      "description": "Personnel issues-Action/decision-Info processing/decision-Decision making/judgment-Pilot"
+      "label": "01-05-73",
+      "description": "Aircraft-Aircraft power plant-Engine fuel and control-Fuel control/carburetor-Not specified"
+    },
+    {
+      "label": "02-04-10",
+      "description": "Personnel issues-Action/decision-Action-Lack of action-Pilot"
+    },
+    {
+      "label": "03-03-10",
+      "description": "Environmental issues-Conditions/weather/phenomena-Temp/humidity/pressure-Conducive to carburetor icing-Effect on operation"
     }
   ],
+  "n_candidates": 246,
+  "n_all_confirmed": 19,
+  "n_exact": 2,
   "source": "findings with cm_inPc = 'T' (scripts/export_readme_example.py)"
 }

@@ -55,16 +55,15 @@ flowchart LR
 ## Example output
 
 <!-- results:example -->
-NTSB case `20240108193628` (the first 2024+ case, in ID order, with two or more cited findings and a cause the NTSB determined; not selected for being correct). Each suggested cause comes with the earlier investigation it relies on:
+NTSB case `20240415194091`, chosen to show a case the system got right: the first 2024+ case, in ID order, whose suggested causes exactly match the NTSB's findings (three or more). Such full matches are not typical: of the 246 test answers with two or more suggested causes, 19 had every suggestion confirmed by the NTSB; overall accuracy is in the results table below. Each suggested cause comes with the earlier investigation it relies on:
 
 | Suggested cause | Confidence | Why (Claude's rationale) | Cited earlier report | Also an NTSB finding? |
 |---|---|---|---|---|
-| Info processing/decision | 0.60 | The crew continued an unstabilized approach with a sustained high descent rate and tailwind instead of executing a go-around, a decision-making failure matching these precedents. | `20170912X51752`, `20201103102225`, `20130806X31354` | Yes |
-| Wind | 0.45 | A roughly 15-knot tailwind and gusting winds increased landing distance and carried the airplane down the runway, as in the cited tailwind-related overruns. | `20150313X90544`, `20230118106596` | No |
-| Action | 0.35 | The captain's abrupt power chop and rapid descent to land, and continued landing despite a tailwind, are action errors similar to those in the precedent accidents. | `20130806X31354` | No |
-| Runway/land/takeoff/taxi surface | 0.35 | The wet runway with standing water and the resulting hydroplaning reduced braking effectiveness, consistent with the precedent wet-runway overruns. | `20230118106596` | No |
+| Action | 0.80 | The pilot did not apply carburetor heat in conditions conducive to carburetor icing, the same omission that the precedent accidents identified as the cause of the power loss. | `20230530192263`, `20180708X94157`, `20171108X52738` | Yes |
+| Engine fuel and control | 0.60 | Carburetor ice formed in the fuel and induction system at glide power and caused the engine power loss, as the precedent accidents show. | `20230530192263`, `20170918X33852`, `20140211X74725` | Yes |
+| Temp/humidity/pressure | 0.50 | The temperature and dew point conditions favored serious carburetor icing at glide or descent power, as in the cited precedents where icing was the environmental condition behind the power loss. | `20140211X74725` | Yes |
 
-What the NTSB concluded for this case: Personnel issues-Action/decision-Info processing/decision-Decision making/judgment-Pilot. 1 of 4 suggested causes match it.
+What the NTSB concluded for this case: Aircraft-Aircraft power plant-Engine fuel and control-Fuel control/carburetor-Not specified; Personnel issues-Action/decision-Action-Lack of action-Pilot; Environmental issues-Conditions/weather/phenomena-Temp/humidity/pressure-Conducive to carburetor icing-Effect on operation. 3 of 3 suggested causes match it.
 <!-- /results:example -->
 
 ## Results
