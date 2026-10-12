@@ -55,14 +55,16 @@ flowchart LR
 ## Example output
 
 <!-- results:example -->
-NTSB case `20240103193598` (the first 2024+ case, in ID order, with two or more cited findings; not selected for being correct). Each suggested cause comes with the earlier investigation it relies on:
+NTSB case `20240108193628` (the first 2024+ case, in ID order, with two or more cited findings and a cause the NTSB determined; not selected for being correct). Each suggested cause comes with the earlier investigation it relies on:
 
 | Suggested cause | Confidence | Why (Claude's rationale) | Cited earlier report | Also an NTSB finding? |
 |---|---|---|---|---|
-| Engine fuel and control | 0.50 | The airplane was idle for 26 months and the pilot could not verify fuel quality (possibly 2+ years old), and the loss of power is consistent with fuel-related causes such as stale fuel or fuel exhaustion in prior accidents. | `20200803X35353` | No |
-| Ignition system | 0.40 | The right magneto would not produce spark when hand-rotated and was disassembled without findings, so an ignition system malfunction is a plausible cause of the power loss, as in prior magneto-related power losses. | `20201013102138` | No |
+| Info processing/decision | 0.60 | The crew continued an unstabilized approach with a sustained high descent rate and tailwind instead of executing a go-around, a decision-making failure matching these precedents. | `20170912X51752`, `20201103102225`, `20130806X31354` | Yes |
+| Wind | 0.45 | A roughly 15-knot tailwind and gusting winds increased landing distance and carried the airplane down the runway, as in the cited tailwind-related overruns. | `20150313X90544`, `20230118106596` | No |
+| Action | 0.35 | The captain's abrupt power chop and rapid descent to land, and continued landing despite a tailwind, are action errors similar to those in the precedent accidents. | `20130806X31354` | No |
+| Runway/land/takeoff/taxi surface | 0.35 | The wet runway with standing water and the resulting hydroplaning reduced braking effectiveness, consistent with the precedent wet-runway overruns. | `20230118106596` | No |
 
-What the NTSB concluded for this case: Not determined-Not determined-(general)-(general)-Unknown/Not determined. 0 of 2 suggested causes match it.
+What the NTSB concluded for this case: Personnel issues-Action/decision-Info processing/decision-Decision making/judgment-Pilot. 1 of 4 suggested causes match it.
 <!-- /results:example -->
 
 ## Results

@@ -1,9 +1,12 @@
 {
-  "ev_id": "20240103193598",
+  "ev_id": "20240108193628",
+  "skipped_undetermined": [
+    "20240103193598"
+  ],
   "official": [
     {
-      "label": "05-00-00",
-      "description": "Not determined-Not determined-(general)-(general)-Unknown/Not determined"
+      "label": "02-04-15",
+      "description": "Personnel issues-Action/decision-Info processing/decision-Decision making/judgment-Pilot"
     }
   ],
   "source": "findings with cm_inPc = 'T' (scripts/export_readme_example.py)"

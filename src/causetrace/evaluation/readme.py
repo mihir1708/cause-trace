@@ -127,12 +127,12 @@ EXAMPLE_RUNS = Path("runs") / "rag_verify__claude-haiku-5-5.jsonl"
 EXAMPLE_OFFICIAL = Path("readme_example.json")
 
 
-def pick_example(causal: Mapping[str, Any] | None, root: Path) -> dict[str, Any] | None:
-    """The first held-out rag_verify answer, in ev_id order, with two or more findings after
-    the tuned cut-off. A fixed rule: the pick never depends on whether the answer is right."""
+def example_candidates(causal: Mapping[str, Any] | None, root: Path) -> list[dict[str, Any]]:
+    """Held-out rag_verify answers, in ev_id order, with two or more findings after the tuned
+    cut-off: the candidates for the README example, in the order the fixed rule tries them."""
     path = root / ARTIFACTS / EXAMPLE_RUNS
     if causal is None or not path.is_file():
-        return None
+        return []
     cut = causal["tuning"]["llm_cutoffs"].get("rag_verify__claude-haiku-5-5", {}).get("tau")
     cases = set(json.loads((root / causal["cases"]["path"]).read_text())["ev_ids"])
     records = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line]
@@ -140,7 +140,16 @@ def pick_example(causal: Mapping[str, Any] | None, root: Path) -> dict[str, Any]
         (apply_cutoff(r, cut) for r in records if r["ev_id"] in cases and r["repeat"] == 0),
         key=lambda r: r["ev_id"],
     )
-    return next((r for r in answers if len(r["findings"]) >= 2), None)
+    return [r for r in answers if len(r["findings"]) >= 2]
+
+
+def pick_example(
+    causal: Mapping[str, Any] | None, root: Path, skip: frozenset[str] = frozenset()
+) -> dict[str, Any] | None:
+    """The first candidate not in ``skip``. A fixed rule: the pick never depends on whether the
+    answer is right. ``skip`` holds cases whose only NTSB finding is "not determined" (written
+    by scripts/export_readme_example.py), which leave nothing to compare the answer with."""
+    return next((r for r in example_candidates(causal, root) if r["ev_id"] not in skip), None)
 
 
 def example_block(causal: Mapping[str, Any] | None, root: Path) -> str:
@@ -148,16 +157,18 @@ def example_block(causal: Mapping[str, Any] | None, root: Path) -> str:
     shown next to the NTSB's official findings when they have been exported."""
     if causal is None or not (root / ARTIFACTS / EXAMPLE_RUNS).is_file():
         return "Not generated yet."
-    pick = pick_example(causal, root)
+    official = _load(root / ARTIFACTS / EXAMPLE_OFFICIAL)
+    skip = frozenset(official.get("skipped_undetermined", [])) if official else frozenset()
+    pick = pick_example(causal, root, skip)
     if pick is None:
         return "No example available."
-    official = _load(root / ARTIFACTS / EXAMPLE_OFFICIAL)
     if official is not None and official.get("ev_id") != pick["ev_id"]:
         official = None  # exported for another case: stale, so not shown
     gold = {o["label"] for o in official["official"]} if official else None
     out = [
         f"NTSB case `{pick['ev_id']}` (the first 2024+ case, in ID order, with two or more "
-        "cited findings; not selected for being correct). Each suggested cause comes with the "
+        "cited findings and a cause the NTSB determined; not selected for being correct). "
+        "Each suggested cause comes with the "
         "earlier investigation it relies on:",
         "",
     ]
